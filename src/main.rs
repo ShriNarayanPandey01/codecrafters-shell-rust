@@ -11,8 +11,7 @@ fn main() {
         io::stdin().read_line(&mut input).unwrap();
 
         match input.trim() {
-            "echo hello" => println!("hello"),
-            "echo world" => println!("world"),
+            s if s.starts_with("echo ") => println!("{}", &s[5..]),
             "exit" => break,
             _ =>(),
         }
