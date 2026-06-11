@@ -1,21 +1,21 @@
+use std::collections::HashMap;
 
+use crate::commands::echo::Echo;
+use crate::commands::exit::Exit;
+use crate::shell::built_in_command::BuiltInCommand;
 
 pub struct CommandRegistry {
-
-    builtins:
-        HashMap<String,
-        Box<dyn BuiltinCommand>>
+    builtins: HashMap<String, Box<dyn BuiltInCommand>>,
 }
 
 impl CommandRegistry {
-
     pub fn new() -> Self {
         let mut registry = CommandRegistry {
             builtins: HashMap::new(),
         };
 
-        registry.register_builtin("echo".to_string(), Box::new(echo));
-        registry.register_builtin("exit".to_string(), Box::new(exit));
+        registry.register_builtin("echo".to_string(), Box::new(Echo));
+        registry.register_builtin("exit".to_string(), Box::new(Exit));
 
         registry
     }

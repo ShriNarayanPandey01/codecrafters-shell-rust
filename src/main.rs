@@ -1,42 +1,74 @@
-#[allow(unused_imports)]
+mod commands {
+    pub mod echo;
+    pub mod exit;
+}
+
+mod lexers {
+    pub mod lexer;
+    pub mod token;
+}
+
+mod registry {
+    pub mod command_registry;
+}
+
+mod shell {
+    pub mod built_in_command;
+    pub mod shell_context;
+}
+
 use std::io::{self, Write};
+
+use lexers::lexer::Lexer;
+use lexers::token::Token;
+use registry::command_registry::CommandRegistry;
+use shell::shell_context::ShellContext;
+
+fn tokens_to_args(tokens: &[Token]) -> Vec<String> {
+    tokens
+        .iter()
+        .filter_map(|token| token.as_word().map(str::to_owned))
+        .collect()
+}
 
 fn main() {
     let registry = CommandRegistry::new();
-    // TODO: Uncomment the code below to pass the first stage
-    loop{
 
+    loop {
         print!("$ ");
         io::stdout().flush().unwrap();
+
         let mut input = String::new();
         io::stdin().read_line(&mut input).unwrap();
-        let mut tokens = Lexer::tokenize(&input);
 
+        let tokens = Lexer::tokenize(&input);
+        if tokens.is_empty() {
+            continue;
+        }
 
-        
-        match tokens[0].trim() {
-            "echo" => {
-                if let Some(command) = registry.get_builtin("echo") {
-                    command.execute(tokens[1..].iter().map(|t| t.to_string()).collect(), &mut ShellContext::new()).unwrap();
-                }
-            },
-            "exit" => {
-                if let Some(command) = registry.get_builtin("exit") {
-                    command.execute(tokens[1..].iter().map(|t| t.to_string()).collect(), &mut ShellContext::new()).unwrap();
-                }
-            },
-            "type" => {
-                if let Some(command) = registry.get_builtin(tokens[1].trim()) {
-                    println!("{} is a built-in command", tokens[1].trim());
-                } else {
-                    println!("{}: not found", tokens[1].trim());
-                    
+        let Some(command_name) = tokens[0].as_word() else {
+            println!("unsupported command syntax");
+            continue;
+        };
+
+        let args = tokens_to_args(&tokens[1..]);
+
+        match command_name {
+            "echo" | "exit" => {
+                if let Some(command) = registry.get_builtin(command_name) {
+                    command.execute(args, &mut ShellContext::new()).unwrap();
                 }
             }
-            _ => println!("{}: not found", tokens[0]),
+            "type" => {
+                if let Some(arg) = tokens.get(1).and_then(Token::as_word) {
+                    if registry.get_builtin(arg).is_some() {
+                        println!("{arg} is a built-in command");
+                    } else {
+                        println!("{arg}: not found");
+                    }
+                }
+            }
+            _ => println!("{command_name}: not found"),
         }
-        
-
     }
-    
 }
