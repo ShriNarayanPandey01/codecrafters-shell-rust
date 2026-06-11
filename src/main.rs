@@ -62,7 +62,7 @@ fn main() {
             "type" => {
                 if let Some(arg) = tokens.get(1).and_then(Token::as_word) {
                     if registry.get_builtin(arg).is_some() {
-                        println!("{arg} is a built-in command");
+                        println!("{arg} is a shell builtin");
                     } else {
                         println!("{arg}: not found");
                     }
