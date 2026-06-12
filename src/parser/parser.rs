@@ -57,7 +57,7 @@ impl Parser {
             .cloned()
             .ok_or_else(|| "expected command name".to_string())?;
         let args = words.into_iter().skip(1).collect();
-
+        
         Ok(ASTNode::Command { name, args })
     }
 }

@@ -4,7 +4,14 @@ use crate::shell::shell_context::ShellContext;
 pub struct Exit;
 
 impl BuiltInCommand for Exit {
-    fn execute(&self, _args: Vec<String>, context: &mut ShellContext) -> Result<(), String> {
-        std::process::exit(context.previous_exit_code);
+    fn execute(&self, args: Vec<String>, _context: &mut ShellContext) -> Result<(), String> {
+        let exit_code = match args.first() {
+            Some(value) => value
+                .parse::<i32>()
+                .map_err(|_| format!("exit: {value}: numeric argument required"))?,
+            None => 0,
+        };
+
+        std::process::exit(exit_code);
     }
 }
