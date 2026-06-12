@@ -8,6 +8,11 @@ mod lexers {
     pub mod token;
 }
 
+mod parser {
+    pub mod ast;
+    pub mod parser;
+}
+
 mod registry {
     pub mod command_registry;
 }
@@ -20,19 +25,56 @@ mod shell {
 use std::io::{self, Write};
 
 use lexers::lexer::Lexer;
-use lexers::token::Token;
+use parser::ast::ASTNode;
+use parser::parser::Parser;
 use registry::command_registry::CommandRegistry;
 use shell::shell_context::ShellContext;
 
-fn tokens_to_args(tokens: &[Token]) -> Vec<String> {
-    tokens
-        .iter()
-        .filter_map(|token| token.as_word().map(str::to_owned))
-        .collect()
+fn execute_ast(
+    node: &ASTNode,
+    registry: &CommandRegistry,
+    context: &mut ShellContext,
+) -> Result<(), String> {
+    match node {
+        ASTNode::Command { name, args } => execute_command(name, args, registry, context),
+        ASTNode::Pipe { .. } => Err("pipes are parsed but not executed yet".to_string()),
+        ASTNode::Redirect { .. } => Err("redirection is not supported yet".to_string()),
+    }
+}
+
+fn execute_command(
+    name: &str,
+    args: &[String],
+    registry: &CommandRegistry,
+    context: &mut ShellContext,
+) -> Result<(), String> {
+    if name == "type" {
+        return run_type_command(args, registry);
+    }
+
+    let command = registry
+        .get_builtin(name)
+        .ok_or_else(|| format!("{name}: not found"))?;
+    command.execute(args.to_vec(), context)
+}
+
+fn run_type_command(args: &[String], registry: &CommandRegistry) -> Result<(), String> {
+    let target = args
+        .first()
+        .ok_or_else(|| "type: missing argument".to_string())?;
+
+    if registry.get_builtin(target).is_some() || target == "type" {
+        println!("{target} is a shell builtin");
+    } else {
+        println!("{target}: not found");
+    }
+
+    Ok(())
 }
 
 fn main() {
     let registry = CommandRegistry::new();
+    let mut context = ShellContext::new();
 
     loop {
         print!("$ ");
@@ -46,29 +88,21 @@ fn main() {
             continue;
         }
 
-        let Some(command_name) = tokens[0].as_word() else {
-            println!("unsupported command syntax");
-            continue;
+        let ast = match Parser::parse(tokens) {
+            Ok(ast) => ast,
+            Err(error) => {
+                eprintln!("{error}");
+                context.previous_exit_code = 1;
+                continue;
+            }
         };
 
-        let args = tokens_to_args(&tokens[1..]);
-
-        match command_name {
-            "echo" | "exit" => {
-                if let Some(command) = registry.get_builtin(command_name) {
-                    command.execute(args, &mut ShellContext::new()).unwrap();
-                }
-            }
-            "type" => {
-                if let Some(arg) = tokens.get(1).and_then(Token::as_word) {
-                    if registry.get_builtin(arg).is_some() {
-                        println!("{arg} is a shell builtin");
-                    } else {
-                        println!("{arg}: not found");
-                    }
-                }
-            }
-            _ => println!("{command_name}: not found"),
+        if let Err(error) = execute_ast(&ast, &registry, &mut context) {
+            eprintln!("{error}");
+            context.previous_exit_code = 1;
+            continue;
         }
+
+        context.previous_exit_code = 0;
     }
 }

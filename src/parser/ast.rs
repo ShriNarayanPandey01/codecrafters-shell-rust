@@ -1,16 +1,13 @@
-#[derive(Debug, PartialEq, Eq, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 
 pub enum ASTNode {
-    Command{
+    Command {
         name: String,
-        args:Vec<String>
+        args: Vec<String>,
     },
-    Pipe{
-        left : Box<ASTNode>,
-        right : Box<ASTNode>
+    Pipe {
+        left: Box<ASTNode>,
+        right: Box<ASTNode>,
     },
-    Redirect{
-        Command : Box<ASTNode>,
-        file : String,
-    }
+    Redirect { command: Box<ASTNode>, file: String },
 }
