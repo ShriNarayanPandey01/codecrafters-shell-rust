@@ -21,6 +21,16 @@ impl Lexer {
                         current_word.push(quoted_char);
                     }
                 }
+                '"' => {
+                    building_word = true;
+                    for quoted_char in chars.by_ref() {
+                        if quoted_char == '"' {
+                            break;
+                        }
+
+                        current_word.push(quoted_char);
+                    }
+                }
                 ' ' | '\t' | '\n' | '\r' => {
                     if building_word {
                         tokens.push(Token::Word(std::mem::take(&mut current_word)));
