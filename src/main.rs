@@ -50,7 +50,7 @@ use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use shell::autocomplete::ShellAutocomplete;
 use shell::completion_registry::CompletionRegistry;
-use shell::shell_context::{BackgroundJobStatus, ShellContext};
+use shell::shell_context::ShellContext;
 
 fn execute_ast(
     node: &ASTNode,
