@@ -19,6 +19,12 @@ impl BuiltInCommand for Exit {
             None => 0,
         };
 
+        // Save history to HISTFILE before exiting, since std::process::exit()
+        // terminates immediately and skips the post-loop save in main.
+        if let Ok(histfile) = std::env::var("HISTFILE") {
+            let _ = _context.save_history_to_file(&histfile);
+        }
+
         std::process::exit(exit_code);
     }
 }
