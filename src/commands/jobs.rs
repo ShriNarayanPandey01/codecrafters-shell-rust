@@ -12,7 +12,7 @@ impl BuiltInCommand for Jobs {
         context: &mut ShellContext,
         stdout: &mut dyn Write,
     ) -> Result<(), String> {
-        let mut statuses = context.collect_job_statuses();
+        let statuses = context.collect_job_statuses();
 
         for (index, status) in statuses.iter().enumerate() {
             match status {

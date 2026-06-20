@@ -50,7 +50,7 @@ use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use shell::autocomplete::ShellAutocomplete;
 use shell::completion_registry::CompletionRegistry;
-use shell::shell_context::ShellContext;
+use shell::shell_context::{BackgroundJobStatus, ShellContext};
 
 fn execute_ast(
     node: &ASTNode,
@@ -356,6 +356,24 @@ fn open_redirect_file(path: &str, append: bool) -> Result<File, String> {
     options.open(path).map_err(|error| error.to_string())
 }
 
+fn reap_and_print_done_jobs(context: &mut ShellContext, stdout: &mut dyn Write) -> Result<(), String> {
+    let statuses = context.collect_job_statuses();
+    for (index, status) in statuses.iter().enumerate() {
+        if let BackgroundJobStatus::Done(job_id, command) = status {
+            let marker = if index + 1 == statuses.len() {
+                '+'
+            } else if index + 1 == statuses.len() - 1 {
+                '-'
+            } else {
+                ' '
+            };
+            writeln!(stdout, "[{job_id}]{marker}  {:24} {command}", "Done")
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 fn main() {
     let registry = CommandRegistry::new();
     let completions = CompletionRegistry::new();
@@ -368,6 +386,10 @@ fn main() {
     editor.set_helper(Some(ShellAutocomplete::new(completions)));
 
     loop {
+        let mut stdout = io::stdout().lock();
+        let _ = reap_and_print_done_jobs(&mut context, &mut stdout);
+        drop(stdout);
+
         let input = match editor.readline("$ ") {
             Ok(input) => input,
             Err(ReadlineError::Eof) => break,
