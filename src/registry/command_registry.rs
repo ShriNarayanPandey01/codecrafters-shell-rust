@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::commands::echo::Echo;
 use crate::commands::exit::Exit;
+use crate::commands::pwd::Pwd;
 use crate::shell::built_in_command::BuiltInCommand;
 
 pub struct CommandRegistry {
@@ -16,6 +17,7 @@ impl CommandRegistry {
 
         registry.register_builtin("echo".to_string(), Box::new(Echo));
         registry.register_builtin("exit".to_string(), Box::new(Exit));
+        registry.register_builtin("pwd".to_string(), Box::new(Pwd));
 
         registry
     }

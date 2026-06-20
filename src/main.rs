@@ -1,6 +1,7 @@
 mod commands {
     pub mod echo;
     pub mod exit;
+    pub mod pwd;
 }
 
 mod lexers {
