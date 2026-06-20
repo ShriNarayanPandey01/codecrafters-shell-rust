@@ -32,9 +32,7 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::process::Child;
+use std::process::{Command, Stdio, Child};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -73,7 +71,7 @@ fn execute_pipe(
     }
 
     // Spawn all commands in the pipeline with pipes connecting them
-    let mut children = Vec::new();
+    let mut children: Vec<Child> = Vec::new();
 
     for (i, cmd) in commands.iter().enumerate() {
         let is_first = i == 0;
@@ -128,7 +126,7 @@ fn extract_pipeline_commands(node: &ASTNode) -> Vec<ASTNode> {
 fn build_command_from_ast(
     node: &ASTNode,
     registry: &CommandRegistry,
-    context: &ShellContext,
+    _context: &ShellContext,
 ) -> Result<Command, String> {
     let execution = flatten_command_execution(node)?;
 

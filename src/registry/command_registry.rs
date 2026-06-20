@@ -4,7 +4,6 @@ use crate::commands::cd::Cd;
 use crate::commands::complete::Complete;
 use crate::commands::echo::Echo;
 use crate::commands::exit::Exit;
-use crate::commands::jobs::Jobs;
 use crate::commands::pwd::Pwd;
 use crate::shell::built_in_command::BuiltInCommand;
 
