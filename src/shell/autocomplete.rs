@@ -143,7 +143,8 @@ fn path_matches(prefix: &str) -> Vec<Pair> {
             .iter()
             .map(|matched| matched.name.as_str())
             .collect::<Vec<_>>(),
-    );
+    )
+    .to_string();
 
     matches
         .into_iter()
