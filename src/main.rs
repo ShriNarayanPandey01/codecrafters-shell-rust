@@ -30,7 +30,7 @@ mod shell {
 
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::{self, Write, Read};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio, Child};
 
@@ -119,8 +119,12 @@ fn execute_two_stage_pipeline(
     {
         use std::os::unix::io::FromRawFd;
         
-        let (pipe_read_fd, pipe_write_fd) = std::os::unix::io::pipe()
-            .map_err(|e| format!("failed to create pipe: {e}"))?;
+        let mut fds: [libc::c_int; 2] = [0; 2];
+        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+            return Err("failed to create pipe".to_string());
+        }
+        let pipe_read_fd = fds[0];
+        let pipe_write_fd = fds[1];
         
         let pipe_read = unsafe { std::fs::File::from_raw_fd(pipe_read_fd) };
         let pipe_write = unsafe { std::fs::File::from_raw_fd(pipe_write_fd) };
@@ -282,7 +286,7 @@ fn execute_builtin_with_input(
     args: &[String],
     registry: &CommandRegistry,
     context: &mut ShellContext,
-    stdin_buffer: &[u8],
+    _stdin_buffer: &[u8],
 ) -> Result<(), String> {
     let mut stdout = io::stdout().lock();
 
@@ -316,9 +320,9 @@ fn extract_command_info(
 
 /// Execute multi-stage pipeline with more than 2 commands
 fn execute_multi_stage_pipeline(
-    commands: &[ASTNode],
-    registry: &CommandRegistry,
-    context: &mut ShellContext,
+    _commands: &[ASTNode],
+    _registry: &CommandRegistry,
+    _context: &mut ShellContext,
 ) -> Result<(), String> {
     // For now, we focus on 2-stage pipelines as per requirements
     // This function can be extended for longer pipelines
