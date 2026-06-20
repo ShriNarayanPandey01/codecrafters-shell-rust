@@ -24,9 +24,9 @@ mod shell {
     pub mod shell_context;
 }
 
+use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::fs::File;
 use std::process::Command;
 use std::process::Stdio;
 
@@ -36,7 +36,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 
 use lexers::lexer::Lexer;
-use parser::ast::ASTNode;
+use parser::ast::{ASTNode, RedirectStream};
 use parser::parser::Parser;
 use registry::command_registry::CommandRegistry;
 use shell::shell_context::ShellContext;
@@ -45,14 +45,56 @@ fn execute_ast(
     node: &ASTNode,
     registry: &CommandRegistry,
     context: &mut ShellContext,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<(), String> {
-    match node {
+    if matches!(node, ASTNode::Pipe { .. }) {
+        return Err("pipes are parsed but not executed yet".to_string());
+    }
+
+    let execution = flatten_command_execution(node)?;
+    let mut redirected_stdout = match execution.stdout_file.as_deref() {
+        Some(path) => Some(File::create(path).map_err(|error| error.to_string())?),
+        None => None,
+    };
+    let mut redirected_stderr = match execution.stderr_file.as_deref() {
+        Some(path) => Some(File::create(path).map_err(|error| error.to_string())?),
+        None => None,
+    };
+
+    let command_result = match execution.command {
         ASTNode::Command { name, args } => {
-            let mut stdout = io::stdout().lock();
-            execute_command(name, args, registry, context, &mut stdout)
+            if name == "type" || registry.get_builtin(name).is_some() {
+                let stdout_writer = redirected_stdout
+                    .as_mut()
+                    .map(|file| file as &mut dyn Write)
+                    .unwrap_or(stdout);
+                execute_command(name, args, registry, context, stdout_writer, None, None)
+            } else {
+                execute_command(
+                    name,
+                    args,
+                    registry,
+                    context,
+                    stdout,
+                    redirected_stdout.take(),
+                    redirected_stderr.take(),
+                )
+            }
         }
-        ASTNode::Pipe { .. } => Err("pipes are parsed but not executed yet".to_string()),
-        ASTNode::Redirect { command, file } => execute_redirect(command, file, registry, context),
+        _ => Err("unsupported command".to_string()),
+    };
+
+    match command_result {
+        Err(error) if execution.stderr_file.is_some() => {
+            if !error.is_empty() {
+                let path = execution.stderr_file.as_deref().unwrap();
+                let mut error_file = File::create(path).map_err(|write_error| write_error.to_string())?;
+                writeln!(error_file, "{error}").map_err(|write_error| write_error.to_string())?;
+            }
+            Err(String::new())
+        }
+        result => result,
     }
 }
 
@@ -62,6 +104,8 @@ fn execute_command(
     registry: &CommandRegistry,
     context: &mut ShellContext,
     stdout: &mut dyn Write,
+    stdout_file: Option<File>,
+    stderr_file: Option<File>,
 ) -> Result<(), String> {
     if name == "type" {
         return run_type_command(args, registry, stdout);
@@ -72,30 +116,7 @@ fn execute_command(
     }
 
     let executable_path = find_command_in_path(name).ok_or_else(|| format!("{name}: not found"))?;
-    run_external_command(name, args, executable_path, None)
-}
-
-fn execute_redirect(
-    command: &ASTNode,
-    file: &str,
-    registry: &CommandRegistry,
-    context: &mut ShellContext,
-) -> Result<(), String> {
-    let output_file = File::create(file).map_err(|error| error.to_string())?;
-
-    match command {
-        ASTNode::Command { name, args } => {
-            if name == "type" || registry.get_builtin(name).is_some() {
-                let mut output_file = output_file;
-                execute_command(name, args, registry, context, &mut output_file)
-            } else {
-                let executable_path =
-                    find_command_in_path(name).ok_or_else(|| format!("{name}: not found"))?;
-                run_external_command(name, args, executable_path, Some(output_file))
-            }
-        }
-        _ => Err("redirection is not supported for this command".to_string()),
-    }
+    run_external_command(name, args, executable_path, stdout_file, stderr_file)
 }
 
 fn run_type_command(
@@ -157,6 +178,7 @@ fn run_external_command(
     args: &[String],
     executable_path: PathBuf,
     stdout_file: Option<File>,
+    stderr_file: Option<File>,
 ) -> Result<(), String> {
     let mut command = Command::new(executable_path);
     command.args(args);
@@ -168,10 +190,50 @@ fn run_external_command(
         command.stdout(Stdio::from(file));
     }
 
+    if let Some(file) = stderr_file {
+        command.stderr(Stdio::from(file));
+    }
+
     command
         .status()
         .map(|_| ())
         .map_err(|error| format!("failed to execute {name}: {error}"))
+}
+
+struct CommandExecution<'a> {
+    command: &'a ASTNode,
+    stdout_file: Option<String>,
+    stderr_file: Option<String>,
+}
+
+fn flatten_command_execution(node: &ASTNode) -> Result<CommandExecution<'_>, String> {
+    let mut current = node;
+    let mut stdout_file = None;
+    let mut stderr_file = None;
+
+    loop {
+        match current {
+            ASTNode::Redirect {
+                command,
+                file,
+                stream,
+            } => {
+                match stream {
+                    RedirectStream::Stdout => stdout_file = Some(file.clone()),
+                    RedirectStream::Stderr => stderr_file = Some(file.clone()),
+                }
+                current = command;
+            }
+            ASTNode::Command { .. } => {
+                return Ok(CommandExecution {
+                    command: current,
+                    stdout_file,
+                    stderr_file,
+                });
+            }
+            ASTNode::Pipe { .. } => return Err("pipes are parsed but not executed yet".to_string()),
+        }
+    }
 }
 
 fn main() {
@@ -193,14 +255,20 @@ fn main() {
         let ast = match Parser::parse(tokens) {
             Ok(ast) => ast,
             Err(error) => {
-                eprintln!("{error}");
+                let mut stderr = io::stderr().lock();
+                writeln!(stderr, "{error}").unwrap();
                 context.previous_exit_code = 1;
                 continue;
             }
         };
 
-        if let Err(error) = execute_ast(&ast, &registry, &mut context) {
-            eprintln!("{error}");
+        let mut stdout = io::stdout().lock();
+        let mut stderr = io::stderr().lock();
+
+        if let Err(error) = execute_ast(&ast, &registry, &mut context, &mut stdout, &mut stderr) {
+            if !error.is_empty() {
+                writeln!(stderr, "{error}").unwrap();
+            }
             context.previous_exit_code = 1;
             continue;
         }

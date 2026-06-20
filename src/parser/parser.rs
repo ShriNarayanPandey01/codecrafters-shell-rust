@@ -1,5 +1,5 @@
 use crate::lexers::token::Token;
-use crate::parser::ast::ASTNode;
+use crate::parser::ast::{ASTNode, RedirectStream};
 
 pub struct Parser;
 
@@ -39,7 +39,7 @@ impl Parser {
 
     fn parse_command(tokens: &[Token]) -> Result<ASTNode, String> {
         let mut words = Vec::new();
-        let mut redirect_file = None;
+        let mut redirects = Vec::new();
         let mut index = 0;
 
         while index < tokens.len() {
@@ -51,7 +51,17 @@ impl Parser {
                         .and_then(Token::as_word)
                         .ok_or_else(|| "expected file after redirection".to_string())?;
 
-                    redirect_file = Some(file.to_string());
+                    redirects.push((RedirectStream::Stdout, file.to_string()));
+                    index += 2;
+                    continue;
+                }
+                Token::RedirectStderr => {
+                    let file = tokens
+                        .get(index + 1)
+                        .and_then(Token::as_word)
+                        .ok_or_else(|| "expected file after redirection".to_string())?;
+
+                    redirects.push((RedirectStream::Stderr, file.to_string()));
                     index += 2;
                     continue;
                 }
@@ -72,14 +82,15 @@ impl Parser {
             .ok_or_else(|| "expected command name".to_string())?;
         let args = words.into_iter().skip(1).collect();
 
-        let command = ASTNode::Command { name, args };
-        if let Some(file) = redirect_file {
-            Ok(ASTNode::Redirect {
+        let mut command = ASTNode::Command { name, args };
+        for (stream, file) in redirects {
+            command = ASTNode::Redirect {
                 command: Box::new(command),
                 file,
-            })
-        } else {
-            Ok(command)
+                stream,
+            };
         }
+
+        Ok(command)
     }
 }

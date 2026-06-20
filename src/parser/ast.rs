@@ -1,4 +1,10 @@
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub enum RedirectStream {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 
 pub enum ASTNode {
     Command {
@@ -9,5 +15,9 @@ pub enum ASTNode {
         left: Box<ASTNode>,
         right: Box<ASTNode>,
     },
-    Redirect { command: Box<ASTNode>, file: String },
+    Redirect {
+        command: Box<ASTNode>,
+        file: String,
+        stream: RedirectStream,
+    },
 }

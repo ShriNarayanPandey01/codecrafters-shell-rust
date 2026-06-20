@@ -3,6 +3,7 @@
 pub enum Token {
     Word(String),
     RedirectStdout,
+    RedirectStderr,
     Pipe,
     Semicolon,
     Ampersand,
