@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use rustyline::completion::{Completer, Pair};
 use rustyline::highlight::Highlighter;
@@ -8,14 +9,18 @@ use rustyline::hint::Hinter;
 use rustyline::validate::Validator;
 use rustyline::{Context, Helper, Result};
 
+use crate::shell::completion_registry::CompletionRegistry;
+
 pub struct ShellAutocomplete {
     builtins: Vec<&'static str>,
+    completions: CompletionRegistry,
 }
 
 impl ShellAutocomplete {
-    pub fn new() -> Self {
+    pub fn new(completions: CompletionRegistry) -> Self {
         Self {
-            builtins: vec!["cd", "echo", "exit", "pwd", "type"],
+            builtins: vec!["cd", "complete", "echo", "exit", "pwd", "type"],
+            completions,
         }
     }
 }
@@ -37,6 +42,8 @@ impl Completer for ShellAutocomplete {
         let token = token_at_cursor(line, pos);
         let matches = if token.is_command_position {
             command_matches(&self.builtins, token.text)
+        } else if let Some(command_name) = command_name(line, pos) {
+            completion_matches(&self.completions, &command_name, token.text)
         } else {
             path_matches(token.text)
         };
@@ -65,6 +72,10 @@ fn token_at_cursor(line: &str, pos: usize) -> TokenAtCursor<'_> {
     }
 }
 
+fn command_name(line: &str, pos: usize) -> Option<String> {
+    line[..pos].split_whitespace().next().map(str::to_string)
+}
+
 fn command_matches(builtins: &[&str], prefix: &str) -> Vec<Pair> {
     let mut matches = BTreeSet::new();
 
@@ -89,6 +100,44 @@ fn command_matches(builtins: &[&str], prefix: &str) -> Vec<Pair> {
                 format!("{matched} ")
             } else {
                 matched
+            },
+        })
+        .collect()
+}
+
+fn completion_matches(
+    completions: &CompletionRegistry,
+    command_name: &str,
+    prefix: &str,
+) -> Vec<Pair> {
+    let Some(script_path) = completions.get(command_name) else {
+        return path_matches(prefix);
+    };
+
+    let output = match Command::new(script_path).output() {
+        Ok(output) => output,
+        Err(_) => return Vec::new(),
+    };
+
+    let candidates = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let has_single_match = candidates.len() == 1;
+    candidates
+        .into_iter()
+        .map(|candidate| Pair {
+            display: candidate.clone(),
+            replacement: if has_single_match {
+                format!("{candidate} ")
+            } else {
+                candidate
             },
         })
         .collect()

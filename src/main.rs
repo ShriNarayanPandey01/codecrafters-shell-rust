@@ -1,5 +1,6 @@
 mod commands {
     pub mod cd;
+    pub mod complete;
     pub mod echo;
     pub mod exit;
     pub mod pwd;
@@ -22,6 +23,7 @@ mod registry {
 mod shell {
     pub mod autocomplete;
     pub mod built_in_command;
+    pub mod completion_registry;
     pub mod shell_context;
 }
 
@@ -46,6 +48,7 @@ use rustyline::config::{BellStyle, CompletionType, Config};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use shell::autocomplete::ShellAutocomplete;
+use shell::completion_registry::CompletionRegistry;
 use shell::shell_context::ShellContext;
 
 fn execute_ast(
@@ -261,13 +264,14 @@ fn open_redirect_file(path: &str, append: bool) -> Result<File, String> {
 
 fn main() {
     let registry = CommandRegistry::new();
-    let mut context = ShellContext::new();
+    let completions = CompletionRegistry::new();
+    let mut context = ShellContext::new(completions.clone());
     let config = Config::builder()
         .completion_type(CompletionType::List)
         .bell_style(BellStyle::Audible)
         .build();
     let mut editor = Editor::<ShellAutocomplete, DefaultHistory>::with_config(config).unwrap();
-    editor.set_helper(Some(ShellAutocomplete::new()));
+    editor.set_helper(Some(ShellAutocomplete::new(completions)));
 
     loop {
         let input = match editor.readline("$ ") {
