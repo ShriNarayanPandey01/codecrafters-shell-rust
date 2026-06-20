@@ -32,8 +32,9 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::process::Command;
-use std::process::Stdio;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::process::Child;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -52,6 +53,119 @@ use shell::autocomplete::ShellAutocomplete;
 use shell::completion_registry::CompletionRegistry;
 use shell::shell_context::{BackgroundJobStatus, ShellContext};
 
+/// Execute a pipeline (connected commands with |)
+fn execute_pipe(
+    node: &ASTNode,
+    registry: &CommandRegistry,
+    context: &mut ShellContext,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<(), String> {
+    // Extract all commands in the pipeline
+    let commands = extract_pipeline_commands(node);
+    if commands.is_empty() {
+        return Err("empty pipeline".to_string());
+    }
+
+    // For a single command (shouldn't happen, but handle it)
+    if commands.len() == 1 {
+        return execute_ast(&commands[0], registry, context, stdout, stderr);
+    }
+
+    // Spawn all commands in the pipeline with pipes connecting them
+    let mut children = Vec::new();
+
+    for (i, cmd) in commands.iter().enumerate() {
+        let is_first = i == 0;
+        let is_last = i == commands.len() - 1;
+
+        let mut command_obj = build_command_from_ast(cmd, registry, context)?;
+
+        // Set up stdin from previous command's stdout
+        if !is_first {
+            if let Some(child) = children.last_mut() {
+                if let Some(stdout_pipe) = child.stdout.take() {
+                    command_obj.stdin(Stdio::from(stdout_pipe));
+                }
+            }
+        }
+
+        // Set up stdout for next command in pipeline or final output
+        if !is_last {
+            command_obj.stdout(Stdio::piped());
+        }
+
+        let child = command_obj
+            .spawn()
+            .map_err(|error| format!("failed to execute command: {error}"))?;
+
+        children.push(child);
+    }
+
+    // Wait for all commands to complete
+    for mut child in children {
+        child
+            .wait()
+            .map_err(|error| format!("failed to wait for command: {error}"))?;
+    }
+
+    Ok(())
+}
+
+/// Extract commands from a pipeline AST node
+fn extract_pipeline_commands(node: &ASTNode) -> Vec<ASTNode> {
+    match node {
+        ASTNode::Pipe { left, right } => {
+            let mut commands = extract_pipeline_commands(left);
+            commands.push((**right).clone());
+            commands
+        }
+        other => vec![other.clone()],
+    }
+}
+
+/// Build a Command object from an AST node without spawning it
+fn build_command_from_ast(
+    node: &ASTNode,
+    registry: &CommandRegistry,
+    context: &ShellContext,
+) -> Result<Command, String> {
+    let execution = flatten_command_execution(node)?;
+
+    match &execution.command {
+        ASTNode::Command { name, args } => {
+            // For now, only support external commands in pipes
+            // Built-in commands in pipes would need different handling
+            if name == "type" || registry.get_builtin(name).is_some() {
+                return Err("built-in commands in pipes are not supported yet".to_string());
+            }
+
+            let executable_path = find_command_in_path(name)
+                .ok_or_else(|| format!("{name}: not found"))?;
+
+            let mut command = Command::new(executable_path);
+            command.args(args);
+
+            #[cfg(unix)]
+            command.arg0(name);
+
+            // Apply any redirections
+            if let Some((path, append)) = execution.stdout_redirect {
+                let file = open_redirect_file(&path, append)?;
+                command.stdout(Stdio::from(file));
+            }
+
+            if let Some((path, append)) = execution.stderr_redirect {
+                let file = open_redirect_file(&path, append)?;
+                command.stderr(Stdio::from(file));
+            }
+
+            Ok(command)
+        }
+        _ => Err("unsupported command in pipeline".to_string()),
+    }
+}
+
 fn execute_ast(
     node: &ASTNode,
     registry: &CommandRegistry,
@@ -60,7 +174,7 @@ fn execute_ast(
     stderr: &mut dyn Write,
 ) -> Result<(), String> {
     if matches!(node, ASTNode::Pipe { .. }) {
-        return Err("pipes are parsed but not executed yet".to_string());
+        return execute_pipe(node, registry, context, stdout, stderr);
     }
 
     let execution = flatten_command_execution(node)?;
