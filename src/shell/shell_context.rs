@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::fs;
 use std::process::Child;
 
 use crate::shell::completion_registry::CompletionRegistry;
@@ -19,6 +21,8 @@ pub struct ShellContext {
     pub completions: CompletionRegistry,
     pub background_jobs: Vec<BackgroundJob>,
     pub history: Vec<String>,
+    pub last_saved_history_index: usize,
+    pub variables: HashMap<String, String>,
 }
 
 impl ShellContext {
@@ -29,7 +33,35 @@ impl ShellContext {
             completions,
             background_jobs: Vec::new(),
             history: Vec::new(),
+            last_saved_history_index: 0,
+            variables: HashMap::new(),
         }
+    }
+
+    pub fn load_history_from_file(&mut self, path: &str) -> Result<(), String> {
+        match fs::read_to_string(path) {
+            Ok(content) => {
+                for line in content.lines() {
+                    if !line.is_empty() {
+                        self.history.push(line.to_string());
+                    }
+                }
+                self.last_saved_history_index = self.history.len();
+                Ok(())
+            }
+            Err(_) => Ok(()), // Silently ignore if file doesn't exist
+        }
+    }
+
+    pub fn save_history_to_file(&self, path: &str) -> Result<(), String> {
+        let history_text = self.history.join("\n");
+        let content = if history_text.is_empty() {
+            "\n".to_string()
+        } else {
+            format!("{}\n", history_text)
+        };
+
+        fs::write(path, content).map_err(|e| format!("Error writing history file: {}", e))
     }
 
     pub fn refresh_current_dir(&mut self) {

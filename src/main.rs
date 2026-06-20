@@ -1,6 +1,7 @@
 mod commands {
     pub mod cd;
     pub mod complete;
+    pub mod declare;
     pub mod echo;
     pub mod exit;
     pub mod history;
@@ -751,6 +752,13 @@ fn main() {
     let registry = CommandRegistry::new();
     let completions = CompletionRegistry::new();
     let mut context = ShellContext::new(completions.clone());
+
+    // Load history from HISTFILE if it exists
+    let histfile = std::env::var("HISTFILE").ok();
+    if let Some(path) = &histfile {
+        let _ = context.load_history_from_file(path);
+    }
+
     let config = Config::builder()
         .completion_type(CompletionType::List)
         .bell_style(BellStyle::Audible)
@@ -822,5 +830,10 @@ fn main() {
         let mut stdout = io::stdout().lock();
         let _ = reap_and_print_done_jobs(&mut context, &mut stdout);
         drop(stdout);
+    }
+
+    // Save history to HISTFILE on exit
+    if let Some(path) = histfile {
+        let _ = context.save_history_to_file(&path);
     }
 }
