@@ -88,7 +88,7 @@ impl Parser {
                 Token::Semicolon => return Err("sequences are not supported yet".to_string()),
                 Token::Ampersand => return Err("background jobs are not supported yet".to_string()),
                 Token::LeftParen | Token::RightParen => {
-                    return Err("subshells are not supported yet".to_string())
+                    return Err("subshells are not supported yet".to_string());
                 }
                 Token::Pipe => return Err("unexpected pipe in command".to_string()),
             }

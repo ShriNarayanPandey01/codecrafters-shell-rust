@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use rustyline::completion::{Completer, Pair};
 use rustyline::highlight::Highlighter;
@@ -14,7 +15,7 @@ pub struct ShellAutocomplete {
 impl ShellAutocomplete {
     pub fn new() -> Self {
         Self {
-            builtins: vec!["echo", "exit"],
+            builtins: vec!["cd", "echo", "exit", "pwd", "type"],
         }
     }
 }
@@ -32,32 +33,35 @@ impl Hinter for ShellAutocomplete {
 impl Completer for ShellAutocomplete {
     type Candidate = Pair;
 
-    fn complete(
-        &self,
-        line: &str,
-        pos: usize,
-        _ctx: &Context<'_>,
-    ) -> Result<(usize, Vec<Pair>)> {
-        if pos != line.len() {
-            return Ok((0, Vec::new()));
-        }
-
-        let prefix = match command_prefix(line, pos) {
-            Some(prefix) => prefix,
-            None => return Ok((0, Vec::new())),
+    fn complete(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Result<(usize, Vec<Pair>)> {
+        let token = token_at_cursor(line, pos);
+        let matches = if token.is_command_position {
+            command_matches(&self.builtins, token.text)
+        } else {
+            path_matches(token.text)
         };
 
-        let matches = command_matches(&self.builtins, prefix);
-
-        Ok((0, matches))
+        Ok((token.start, matches))
     }
 }
 
-fn command_prefix(line: &str, pos: usize) -> Option<&str> {
-    if line[..pos].contains(char::is_whitespace) {
-        None
-    } else {
-        Some(&line[..pos])
+struct TokenAtCursor<'a> {
+    start: usize,
+    text: &'a str,
+    is_command_position: bool,
+}
+
+fn token_at_cursor(line: &str, pos: usize) -> TokenAtCursor<'_> {
+    let before_cursor = &line[..pos];
+    let start = before_cursor
+        .rfind(char::is_whitespace)
+        .map(|index| index + 1)
+        .unwrap_or(0);
+
+    TokenAtCursor {
+        start,
+        text: &line[start..pos],
+        is_command_position: start == 0,
     }
 }
 
@@ -88,6 +92,113 @@ fn command_matches(builtins: &[&str], prefix: &str) -> Vec<Pair> {
             },
         })
         .collect()
+}
+
+fn path_matches(prefix: &str) -> Vec<Pair> {
+    let (directory_prefix, entry_prefix, search_directory) = split_path_for_completion(prefix);
+    let Ok(entries) = fs::read_dir(&search_directory) else {
+        return Vec::new();
+    };
+
+    let mut matches = Vec::new();
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(|name| name.to_string()) else {
+            continue;
+        };
+
+        if !name.starts_with(entry_prefix) {
+            continue;
+        }
+
+        let is_directory = entry
+            .file_type()
+            .map(|file_type| file_type.is_dir())
+            .unwrap_or(false);
+        matches.push(PathMatch { name, is_directory });
+    }
+
+    matches.sort_by(|left, right| left.name.cmp(&right.name));
+
+    if matches.is_empty() {
+        return Vec::new();
+    }
+
+    if matches.len() == 1 {
+        let matched = &matches[0];
+        let completed = format!("{directory_prefix}{}", matched.name);
+        let replacement = if matched.is_directory {
+            format!("{completed}/")
+        } else {
+            format!("{completed} ")
+        };
+
+        return vec![Pair {
+            display: display_match(&matched.name, matched.is_directory),
+            replacement,
+        }];
+    }
+
+    let common_prefix = longest_common_prefix(
+        &matches
+            .iter()
+            .map(|matched| matched.name.as_str())
+            .collect::<Vec<_>>(),
+    );
+
+    matches
+        .into_iter()
+        .map(|matched| Pair {
+            display: display_match(&matched.name, matched.is_directory),
+            replacement: format!("{directory_prefix}{common_prefix}"),
+        })
+        .collect()
+}
+
+struct PathMatch {
+    name: String,
+    is_directory: bool,
+}
+
+fn split_path_for_completion(prefix: &str) -> (String, &str, PathBuf) {
+    if let Some(last_separator) = prefix.rfind('/') {
+        let directory_prefix = prefix[..=last_separator].to_string();
+        let entry_prefix = &prefix[last_separator + 1..];
+        let search_directory = if directory_prefix == "/" {
+            PathBuf::from("/")
+        } else {
+            PathBuf::from(directory_prefix.trim_end_matches('/'))
+        };
+
+        (directory_prefix, entry_prefix, search_directory)
+    } else {
+        ("".to_string(), prefix, PathBuf::from("."))
+    }
+}
+
+fn display_match(name: &str, is_directory: bool) -> String {
+    if is_directory {
+        format!("{name}/")
+    } else {
+        name.to_string()
+    }
+}
+
+fn longest_common_prefix<'a>(values: &[&'a str]) -> &'a str {
+    let Some(first) = values.first().copied() else {
+        return "";
+    };
+
+    let mut prefix_len = first.len();
+    for value in values.iter().skip(1) {
+        let shared_bytes = first
+            .bytes()
+            .zip(value.bytes())
+            .take_while(|(left, right)| left == right)
+            .count();
+        prefix_len = prefix_len.min(shared_bytes);
+    }
+
+    &first[..prefix_len]
 }
 
 fn path_executables() -> BTreeSet<String> {

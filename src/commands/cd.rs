@@ -13,7 +13,9 @@ impl BuiltInCommand for Cd {
         context: &mut ShellContext,
         _stdout: &mut dyn Write,
     ) -> Result<(), String> {
-        let target = args.first().ok_or_else(|| "cd: missing argument".to_string())?;
+        let target = args
+            .first()
+            .ok_or_else(|| "cd: missing argument".to_string())?;
         let resolved_target = if target == "~" {
             std::env::var("HOME").map_err(|_| "cd: HOME not set".to_string())?
         } else {

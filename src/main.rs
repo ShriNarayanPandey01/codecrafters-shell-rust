@@ -41,10 +41,10 @@ use lexers::lexer::Lexer;
 use parser::ast::{ASTNode, RedirectStream};
 use parser::parser::Parser;
 use registry::command_registry::CommandRegistry;
+use rustyline::Editor;
 use rustyline::config::{BellStyle, CompletionType, Config};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
-use rustyline::Editor;
 use shell::autocomplete::ShellAutocomplete;
 use shell::shell_context::ShellContext;
 
