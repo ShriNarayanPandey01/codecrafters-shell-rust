@@ -108,10 +108,11 @@ fn append_history_file(context: &mut ShellContext, path: &str) -> Result<(), Str
     let existing_content = fs::read_to_string(path).unwrap_or_default();
 
     // Get new commands since last save
-    let new_commands: Vec<&String> = context
+    let new_commands: Vec<String> = context
         .history
         .iter()
         .skip(context.last_saved_history_index)
+        .cloned()
         .collect();
 
     if new_commands.is_empty() {
