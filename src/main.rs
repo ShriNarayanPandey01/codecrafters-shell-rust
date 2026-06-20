@@ -41,6 +41,7 @@ use lexers::lexer::Lexer;
 use parser::ast::{ASTNode, RedirectStream};
 use parser::parser::Parser;
 use registry::command_registry::CommandRegistry;
+use rustyline::config::{BellStyle, CompletionType, Config};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::Editor;
@@ -261,7 +262,11 @@ fn open_redirect_file(path: &str, append: bool) -> Result<File, String> {
 fn main() {
     let registry = CommandRegistry::new();
     let mut context = ShellContext::new();
-    let mut editor = Editor::<ShellAutocomplete, DefaultHistory>::new().unwrap();
+    let config = Config::builder()
+        .completion_type(CompletionType::List)
+        .bell_style(BellStyle::Audible)
+        .build();
+    let mut editor = Editor::<ShellAutocomplete, DefaultHistory>::with_config(config).unwrap();
     editor.set_helper(Some(ShellAutocomplete::new()));
 
     loop {
