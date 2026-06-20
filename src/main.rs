@@ -799,9 +799,23 @@ fn main() {
                 writeln!(stderr, "{error}").unwrap();
             }
             context.previous_exit_code = 1;
+            drop(stderr);
+            drop(stdout);
+            
+            // Check for completed jobs after command execution
+            let mut stdout = io::stdout().lock();
+            let _ = reap_and_print_done_jobs(&mut context, &mut stdout);
+            drop(stdout);
             continue;
         }
 
         context.previous_exit_code = 0;
+        drop(stderr);
+        drop(stdout);
+        
+        // Check for completed jobs after command execution
+        let mut stdout = io::stdout().lock();
+        let _ = reap_and_print_done_jobs(&mut context, &mut stdout);
+        drop(stdout);
     }
 }
