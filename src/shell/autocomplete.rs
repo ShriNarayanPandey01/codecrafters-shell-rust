@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use rustyline::completion::longest_common_prefix as rustyline_longest_common_prefix;
 use rustyline::completion::{Completer, Pair};
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
@@ -43,7 +44,7 @@ impl Completer for ShellAutocomplete {
         let matches = if token.is_command_position {
             command_matches(&self.builtins, token.text)
         } else if let Some(command_name) = command_name(line, pos) {
-            completion_matches(&self.completions, &command_name, token.text)
+            completion_matches(&self.completions, line, pos, &command_name, token.text)
         } else {
             path_matches(token.text)
         };
@@ -107,40 +108,71 @@ fn command_matches(builtins: &[&str], prefix: &str) -> Vec<Pair> {
 
 fn completion_matches(
     completions: &CompletionRegistry,
+    line: &str,
+    pos: usize,
     command_name: &str,
     prefix: &str,
 ) -> Vec<Pair> {
+    if completions.is_disabled(command_name) {
+        return Vec::new();
+    }
+
     let Some(script_path) = completions.get(command_name) else {
         return path_matches(prefix);
     };
 
-    let output = match Command::new(script_path).output() {
+    let previous_word = previous_word(line, pos);
+    let output = match Command::new(script_path)
+        .arg(command_name)
+        .arg(prefix)
+        .arg(previous_word)
+        .env("COMP_LINE", line)
+        .env("COMP_POINT", pos.to_string())
+        .output()
+    {
         Ok(output) => output,
         Err(_) => return Vec::new(),
     };
 
-    let candidates = String::from_utf8_lossy(&output.stdout)
+    let mut candidates = String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter(|line| !line.is_empty())
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
+    candidates.sort();
+    candidates.dedup();
+
     if candidates.is_empty() {
         return Vec::new();
     }
 
-    let has_single_match = candidates.len() == 1;
-    candidates
+    if candidates.len() == 1 {
+        let candidate = candidates.pop().unwrap();
+        return vec![Pair {
+            display: candidate.clone(),
+            replacement: format!("{candidate} "),
+        }];
+    }
+
+    let pairs = candidates
         .into_iter()
         .map(|candidate| Pair {
             display: candidate.clone(),
-            replacement: if has_single_match {
-                format!("{candidate} ")
-            } else {
-                candidate
-            },
+            replacement: candidate,
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    if let Some(lcp) = rustyline_longest_common_prefix(&pairs) {
+        if lcp.len() > prefix.len() {
+            return vec![Pair {
+                display: lcp.to_string(),
+                replacement: lcp.to_string(),
+            }];
+        }
+    }
+
+    pairs
 }
 
 fn path_matches(prefix: &str) -> Vec<Pair> {
@@ -231,6 +263,21 @@ fn display_match(name: &str, is_directory: bool) -> String {
     } else {
         name.to_string()
     }
+}
+
+fn previous_word(line: &str, pos: usize) -> String {
+    let before_cursor = &line[..pos];
+    let current_start = before_cursor
+        .rfind(char::is_whitespace)
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let before_current = before_cursor[..current_start].trim_end_matches(char::is_whitespace);
+
+    before_current
+        .split_whitespace()
+        .last()
+        .unwrap_or("")
+        .to_string()
 }
 
 fn longest_common_prefix<'a>(values: &[&'a str]) -> &'a str {

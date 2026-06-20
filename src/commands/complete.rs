@@ -28,6 +28,10 @@ impl BuiltInCommand for Complete {
                     .register(command.clone(), script_path.clone());
                 Ok(())
             }
+            [flag, command] if flag == "-r" => {
+                context.completions.remove(command);
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
