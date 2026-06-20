@@ -26,7 +26,9 @@ mod shell {
 
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::fs::File;
 use std::process::Command;
+use std::process::Stdio;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -45,9 +47,12 @@ fn execute_ast(
     context: &mut ShellContext,
 ) -> Result<(), String> {
     match node {
-        ASTNode::Command { name, args } => execute_command(name, args, registry, context),
+        ASTNode::Command { name, args } => {
+            let mut stdout = io::stdout().lock();
+            execute_command(name, args, registry, context, &mut stdout)
+        }
         ASTNode::Pipe { .. } => Err("pipes are parsed but not executed yet".to_string()),
-        ASTNode::Redirect { .. } => Err("redirection is not supported yet".to_string()),
+        ASTNode::Redirect { command, file } => execute_redirect(command, file, registry, context),
     }
 }
 
@@ -56,30 +61,58 @@ fn execute_command(
     args: &[String],
     registry: &CommandRegistry,
     context: &mut ShellContext,
+    stdout: &mut dyn Write,
 ) -> Result<(), String> {
     if name == "type" {
-        return run_type_command(args, registry);
+        return run_type_command(args, registry, stdout);
     }
 
     if let Some(command) = registry.get_builtin(name) {
-        return command.execute(args.to_vec(), context);
+        return command.execute(args.to_vec(), context, stdout);
     }
 
     let executable_path = find_command_in_path(name).ok_or_else(|| format!("{name}: not found"))?;
-    run_external_command(name, args, executable_path)
+    run_external_command(name, args, executable_path, None)
 }
 
-fn run_type_command(args: &[String], registry: &CommandRegistry) -> Result<(), String> {
+fn execute_redirect(
+    command: &ASTNode,
+    file: &str,
+    registry: &CommandRegistry,
+    context: &mut ShellContext,
+) -> Result<(), String> {
+    let output_file = File::create(file).map_err(|error| error.to_string())?;
+
+    match command {
+        ASTNode::Command { name, args } => {
+            if name == "type" || registry.get_builtin(name).is_some() {
+                let mut output_file = output_file;
+                execute_command(name, args, registry, context, &mut output_file)
+            } else {
+                let executable_path =
+                    find_command_in_path(name).ok_or_else(|| format!("{name}: not found"))?;
+                run_external_command(name, args, executable_path, Some(output_file))
+            }
+        }
+        _ => Err("redirection is not supported for this command".to_string()),
+    }
+}
+
+fn run_type_command(
+    args: &[String],
+    registry: &CommandRegistry,
+    stdout: &mut dyn Write,
+) -> Result<(), String> {
     let target = args
         .first()
         .ok_or_else(|| "type: missing argument".to_string())?;
 
     if registry.get_builtin(target).is_some() || target == "type" {
-        println!("{target} is a shell builtin");
+        writeln!(stdout, "{target} is a shell builtin").map_err(|error| error.to_string())?;
     } else if let Some(path) = find_command_in_path(target) {
-        println!("{target} is {}", path.display());
+        writeln!(stdout, "{target} is {}", path.display()).map_err(|error| error.to_string())?;
     } else {
-        println!("{target}: not found");
+        writeln!(stdout, "{target}: not found").map_err(|error| error.to_string())?;
     }
 
     Ok(())
@@ -119,12 +152,21 @@ fn is_executable_file(path: &PathBuf) -> bool {
     }
 }
 
-fn run_external_command(name: &str, args: &[String], executable_path: PathBuf) -> Result<(), String> {
+fn run_external_command(
+    name: &str,
+    args: &[String],
+    executable_path: PathBuf,
+    stdout_file: Option<File>,
+) -> Result<(), String> {
     let mut command = Command::new(executable_path);
     command.args(args);
 
     #[cfg(unix)]
     command.arg0(name);
+
+    if let Some(file) = stdout_file {
+        command.stdout(Stdio::from(file));
+    }
 
     command
         .status()

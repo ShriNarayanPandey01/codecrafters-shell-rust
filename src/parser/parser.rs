@@ -39,10 +39,22 @@ impl Parser {
 
     fn parse_command(tokens: &[Token]) -> Result<ASTNode, String> {
         let mut words = Vec::new();
+        let mut redirect_file = None;
+        let mut index = 0;
 
-        for token in tokens {
-            match token {
+        while index < tokens.len() {
+            match &tokens[index] {
                 Token::Word(word) => words.push(word.clone()),
+                Token::RedirectStdout => {
+                    let file = tokens
+                        .get(index + 1)
+                        .and_then(Token::as_word)
+                        .ok_or_else(|| "expected file after redirection".to_string())?;
+
+                    redirect_file = Some(file.to_string());
+                    index += 2;
+                    continue;
+                }
                 Token::Semicolon => return Err("sequences are not supported yet".to_string()),
                 Token::Ampersand => return Err("background jobs are not supported yet".to_string()),
                 Token::LeftParen | Token::RightParen => {
@@ -50,6 +62,8 @@ impl Parser {
                 }
                 Token::Pipe => return Err("unexpected pipe in command".to_string()),
             }
+
+            index += 1;
         }
 
         let name = words
@@ -57,7 +71,15 @@ impl Parser {
             .cloned()
             .ok_or_else(|| "expected command name".to_string())?;
         let args = words.into_iter().skip(1).collect();
-        
-        Ok(ASTNode::Command { name, args })
+
+        let command = ASTNode::Command { name, args };
+        if let Some(file) = redirect_file {
+            Ok(ASTNode::Redirect {
+                command: Box::new(command),
+                file,
+            })
+        } else {
+            Ok(command)
+        }
     }
 }

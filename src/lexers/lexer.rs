@@ -11,6 +11,18 @@ impl Lexer {
 
         while let Some(ch) = chars.next() {
             match ch {
+                '1' if !building_word && chars.peek() == Some(&'>') => {
+                    chars.next();
+                    tokens.push(Token::RedirectStdout);
+                }
+                '>' => {
+                    if building_word {
+                        tokens.push(Token::Word(std::mem::take(&mut current_word)));
+                        building_word = false;
+                    }
+
+                    tokens.push(Token::RedirectStdout);
+                }
                 '\\' => {
                     if let Some(escaped_char) = chars.next() {
                         building_word = true;
