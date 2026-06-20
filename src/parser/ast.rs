@@ -1,6 +1,7 @@
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum RedirectStream {
     Stdout,
+    StdoutAppend,
     Stderr,
 }
 

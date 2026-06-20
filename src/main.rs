@@ -25,6 +25,7 @@ mod shell {
 }
 
 use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::Command;
@@ -53,8 +54,8 @@ fn execute_ast(
     }
 
     let execution = flatten_command_execution(node)?;
-    let mut redirected_stdout = match execution.stdout_file.as_deref() {
-        Some(path) => Some(File::create(path).map_err(|error| error.to_string())?),
+    let mut redirected_stdout = match execution.stdout_redirect.as_ref() {
+        Some((path, append)) => Some(open_redirect_file(path, *append)?),
         None => None,
     };
     let mut redirected_stderr = match execution.stderr_file.as_deref() {
@@ -202,13 +203,13 @@ fn run_external_command(
 
 struct CommandExecution<'a> {
     command: &'a ASTNode,
-    stdout_file: Option<String>,
+    stdout_redirect: Option<(String, bool)>,
     stderr_file: Option<String>,
 }
 
 fn flatten_command_execution(node: &ASTNode) -> Result<CommandExecution<'_>, String> {
     let mut current = node;
-    let mut stdout_file = None;
+    let mut stdout_redirect = None;
     let mut stderr_file = None;
 
     loop {
@@ -219,7 +220,8 @@ fn flatten_command_execution(node: &ASTNode) -> Result<CommandExecution<'_>, Str
                 stream,
             } => {
                 match stream {
-                    RedirectStream::Stdout => stdout_file = Some(file.clone()),
+                    RedirectStream::Stdout => stdout_redirect = Some((file.clone(), false)),
+                    RedirectStream::StdoutAppend => stdout_redirect = Some((file.clone(), true)),
                     RedirectStream::Stderr => stderr_file = Some(file.clone()),
                 }
                 current = command;
@@ -227,13 +229,26 @@ fn flatten_command_execution(node: &ASTNode) -> Result<CommandExecution<'_>, Str
             ASTNode::Command { .. } => {
                 return Ok(CommandExecution {
                     command: current,
-                    stdout_file,
+                    stdout_redirect,
                     stderr_file,
                 });
             }
             ASTNode::Pipe { .. } => return Err("pipes are parsed but not executed yet".to_string()),
         }
     }
+}
+
+fn open_redirect_file(path: &str, append: bool) -> Result<File, String> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true);
+
+    if append {
+        options.append(true);
+    } else {
+        options.truncate(true);
+    }
+
+    options.open(path).map_err(|error| error.to_string())
 }
 
 fn main() {

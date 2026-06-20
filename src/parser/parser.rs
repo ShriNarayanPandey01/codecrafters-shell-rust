@@ -55,6 +55,16 @@ impl Parser {
                     index += 2;
                     continue;
                 }
+                Token::RedirectStdoutAppend => {
+                    let file = tokens
+                        .get(index + 1)
+                        .and_then(Token::as_word)
+                        .ok_or_else(|| "expected file after redirection".to_string())?;
+
+                    redirects.push((RedirectStream::StdoutAppend, file.to_string()));
+                    index += 2;
+                    continue;
+                }
                 Token::RedirectStderr => {
                     let file = tokens
                         .get(index + 1)

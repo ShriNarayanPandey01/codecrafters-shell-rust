@@ -11,13 +11,18 @@ impl Lexer {
 
         while let Some(ch) = chars.next() {
             match ch {
+                '1' if !building_word && chars.peek() == Some(&'>') => {
+                    chars.next();
+                    if chars.peek() == Some(&'>') {
+                        chars.next();
+                        tokens.push(Token::RedirectStdoutAppend);
+                    } else {
+                        tokens.push(Token::RedirectStdout);
+                    }
+                }
                 '2' if !building_word && chars.peek() == Some(&'>') => {
                     chars.next();
                     tokens.push(Token::RedirectStderr);
-                }
-                '1' if !building_word && chars.peek() == Some(&'>') => {
-                    chars.next();
-                    tokens.push(Token::RedirectStdout);
                 }
                 '>' => {
                     if building_word {
@@ -25,7 +30,12 @@ impl Lexer {
                         building_word = false;
                     }
 
-                    tokens.push(Token::RedirectStdout);
+                    if chars.peek() == Some(&'>') {
+                        chars.next();
+                        tokens.push(Token::RedirectStdoutAppend);
+                    } else {
+                        tokens.push(Token::RedirectStdout);
+                    }
                 }
                 '\\' => {
                     if let Some(escaped_char) = chars.next() {
