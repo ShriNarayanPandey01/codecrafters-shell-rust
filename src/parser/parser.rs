@@ -42,7 +42,19 @@ impl Parser {
         let mut redirects = Vec::new();
         let mut index = 0;
 
+        let mut last_is_background = false;
+        if tokens.last() == Some(&Token::Ampersand) {
+            if tokens.len() == 1 {
+                return Err("expected command before &".to_string());
+            }
+            last_is_background = true;
+        }
+
         while index < tokens.len() {
+            if last_is_background && index == tokens.len() - 1 {
+                break;
+            }
+
             match &tokens[index] {
                 Token::Word(word) => words.push(word.clone()),
                 Token::RedirectStdout => {
@@ -86,7 +98,7 @@ impl Parser {
                     continue;
                 }
                 Token::Semicolon => return Err("sequences are not supported yet".to_string()),
-                Token::Ampersand => return Err("background jobs are not supported yet".to_string()),
+                Token::Ampersand => return Err("background jobs are only supported at end of command".to_string()),
                 Token::LeftParen | Token::RightParen => {
                     return Err("subshells are not supported yet".to_string());
                 }
@@ -95,6 +107,29 @@ impl Parser {
 
             index += 1;
         }
+
+        let name = words
+            .first()
+            .cloned()
+            .ok_or_else(|| "expected command name".to_string())?;
+        let args = words.into_iter().skip(1).collect();
+
+        let mut command = ASTNode::Command { name, args };
+        for (stream, file) in redirects {
+            command = ASTNode::Redirect {
+                command: Box::new(command),
+                file,
+                stream,
+            };
+        }
+
+        if last_is_background {
+            command = ASTNode::Background {
+                command: Box::new(command),
+            };
+        }
+
+        Ok(command)
 
         let name = words
             .first()

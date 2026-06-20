@@ -3,6 +3,7 @@ mod commands {
     pub mod complete;
     pub mod echo;
     pub mod exit;
+    pub mod jobs;
     pub mod pwd;
 }
 
@@ -49,7 +50,7 @@ use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use shell::autocomplete::ShellAutocomplete;
 use shell::completion_registry::CompletionRegistry;
-use shell::shell_context::ShellContext;
+use shell::shell_context::{BackgroundJobStatus, ShellContext};
 
 fn execute_ast(
     node: &ASTNode,
@@ -75,11 +76,28 @@ fn execute_ast(
     let command_result = match execution.command {
         ASTNode::Command { name, args } => {
             if name == "type" || registry.get_builtin(name).is_some() {
+                if execution.background {
+                    return Err("background builtins are not supported yet".to_string());
+                }
+
                 let stdout_writer = redirected_stdout
                     .as_mut()
                     .map(|file| file as &mut dyn Write)
                     .unwrap_or(stdout);
-                execute_command(name, args, registry, context, stdout_writer, None, None)
+                execute_command(name, args, registry, context, stdout_writer, None, None, false)
+            } else if execution.background {
+                let command_string = build_command_string(name, args);
+                run_external_command_background(
+                    name,
+                    args,
+                    find_command_in_path(name)
+                        .ok_or_else(|| format!("{name}: not found"))?,
+                    stdout,
+                    redirected_stdout.take(),
+                    redirected_stderr.take(),
+                    context,
+                    command_string,
+                )
             } else {
                 execute_command(
                     name,
@@ -89,7 +107,30 @@ fn execute_ast(
                     stdout,
                     redirected_stdout.take(),
                     redirected_stderr.take(),
+                    false,
                 )
+            }
+        }
+        ASTNode::Background { command } => {
+            let execution = flatten_command_execution(command)?;
+            if let ASTNode::Command { name, args } = execution.command {
+                if name == "type" || registry.get_builtin(name).is_some() {
+                    return Err("background builtins are not supported yet".to_string());
+                }
+                let command_string = build_command_string(name, args);
+                run_external_command_background(
+                    name,
+                    args,
+                    find_command_in_path(name)
+                        .ok_or_else(|| format!("{name}: not found"))?,
+                    stdout,
+                    redirected_stdout.take(),
+                    redirected_stderr.take(),
+                    context,
+                    command_string,
+                )
+            } else {
+                Err("unsupported background command".to_string())
             }
         }
         _ => Err("unsupported command".to_string()),
@@ -113,17 +154,18 @@ fn execute_command(
     name: &str,
     args: &[String],
     registry: &CommandRegistry,
-    context: &mut ShellContext,
+    _context: &mut ShellContext,
     stdout: &mut dyn Write,
     stdout_file: Option<File>,
     stderr_file: Option<File>,
+    _background: bool,
 ) -> Result<(), String> {
     if name == "type" {
         return run_type_command(args, registry, stdout);
     }
 
     if let Some(command) = registry.get_builtin(name) {
-        return command.execute(args.to_vec(), context, stdout);
+        return command.execute(args.to_vec(), _context, stdout);
     }
 
     let executable_path = find_command_in_path(name).ok_or_else(|| format!("{name}: not found"))?;
@@ -211,16 +253,63 @@ fn run_external_command(
         .map_err(|error| format!("failed to execute {name}: {error}"))
 }
 
+fn run_external_command_background(
+    name: &str,
+    args: &[String],
+    executable_path: PathBuf,
+    stdout: &mut dyn Write,
+    stdout_file: Option<File>,
+    stderr_file: Option<File>,
+    context: &mut ShellContext,
+    command_string: String,
+) -> Result<(), String> {
+    let mut command = Command::new(executable_path);
+    command.args(args);
+
+    #[cfg(unix)]
+    command.arg0(name);
+
+    if let Some(file) = stdout_file {
+        command.stdout(Stdio::from(file));
+    }
+
+    if let Some(file) = stderr_file {
+        command.stderr(Stdio::from(file));
+    }
+
+    let child = command
+        .spawn()
+        .map_err(|error| format!("failed to execute {name}: {error}"))?;
+
+    let job_id = context.add_background_job(child, command_string);
+    writeln!(stdout, "[{job_id}] {}", context.background_jobs.last().unwrap().child.id())
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn build_command_string(name: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        name.to_string()
+    } else {
+        let mut pieces = Vec::with_capacity(args.len() + 1);
+        pieces.push(name.to_string());
+        pieces.extend(args.iter().cloned());
+        pieces.join(" ")
+    }
+}
+
 struct CommandExecution<'a> {
     command: &'a ASTNode,
     stdout_redirect: Option<(String, bool)>,
     stderr_redirect: Option<(String, bool)>,
+    background: bool,
 }
 
 fn flatten_command_execution(node: &ASTNode) -> Result<CommandExecution<'_>, String> {
     let mut current = node;
     let mut stdout_redirect = None;
     let mut stderr_redirect = None;
+    let mut background = false;
 
     loop {
         match current {
@@ -237,11 +326,16 @@ fn flatten_command_execution(node: &ASTNode) -> Result<CommandExecution<'_>, Str
                 }
                 current = command;
             }
+            ASTNode::Background { command } => {
+                background = true;
+                current = command;
+            }
             ASTNode::Command { .. } => {
                 return Ok(CommandExecution {
                     command: current,
                     stdout_redirect,
                     stderr_redirect,
+                    background,
                 });
             }
             ASTNode::Pipe { .. } => return Err("pipes are parsed but not executed yet".to_string()),

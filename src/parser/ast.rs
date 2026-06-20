@@ -7,7 +7,6 @@ pub enum RedirectStream {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-
 pub enum ASTNode {
     Command {
         name: String,
@@ -21,5 +20,8 @@ pub enum ASTNode {
         command: Box<ASTNode>,
         file: String,
         stream: RedirectStream,
+    },
+    Background {
+        command: Box<ASTNode>,
     },
 }

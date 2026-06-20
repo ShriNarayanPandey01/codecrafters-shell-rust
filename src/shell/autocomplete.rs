@@ -20,7 +20,7 @@ pub struct ShellAutocomplete {
 impl ShellAutocomplete {
     pub fn new(completions: CompletionRegistry) -> Self {
         Self {
-            builtins: vec!["cd", "complete", "echo", "exit", "pwd", "type"],
+            builtins: vec!["cd", "complete", "echo", "exit", "jobs", "pwd", "type"],
             completions,
         }
     }
