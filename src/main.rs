@@ -20,6 +20,7 @@ mod registry {
 }
 
 mod shell {
+    pub mod autocomplete;
     pub mod built_in_command;
     pub mod shell_context;
 }
@@ -40,6 +41,10 @@ use lexers::lexer::Lexer;
 use parser::ast::{ASTNode, RedirectStream};
 use parser::parser::Parser;
 use registry::command_registry::CommandRegistry;
+use rustyline::error::ReadlineError;
+use rustyline::history::DefaultHistory;
+use rustyline::Editor;
+use shell::autocomplete::ShellAutocomplete;
 use shell::shell_context::ShellContext;
 
 fn execute_ast(
@@ -256,13 +261,23 @@ fn open_redirect_file(path: &str, append: bool) -> Result<File, String> {
 fn main() {
     let registry = CommandRegistry::new();
     let mut context = ShellContext::new();
+    let mut editor = Editor::<ShellAutocomplete, DefaultHistory>::new().unwrap();
+    editor.set_helper(Some(ShellAutocomplete::new()));
 
     loop {
-        print!("$ ");
-        io::stdout().flush().unwrap();
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
+        let input = match editor.readline("$ ") {
+            Ok(input) => input,
+            Err(ReadlineError::Eof) => break,
+            Err(ReadlineError::Interrupted) => {
+                println!();
+                continue;
+            }
+            Err(error) => {
+                let mut stderr = io::stderr().lock();
+                writeln!(stderr, "{error}").unwrap();
+                break;
+            }
+        };
 
         let tokens = Lexer::tokenize(&input);
         if tokens.is_empty() {
