@@ -4,6 +4,7 @@ use crate::commands::cd::Cd;
 use crate::commands::complete::Complete;
 use crate::commands::echo::Echo;
 use crate::commands::exit::Exit;
+use crate::commands::history::History;
 use crate::commands::pwd::Pwd;
 use crate::shell::built_in_command::BuiltInCommand;
 
@@ -21,6 +22,7 @@ impl CommandRegistry {
         registry.register_builtin("complete".to_string(), Box::new(Complete));
         registry.register_builtin("echo".to_string(), Box::new(Echo));
         registry.register_builtin("exit".to_string(), Box::new(Exit));
+        registry.register_builtin("history".to_string(), Box::new(History));
         registry.register_builtin("jobs".to_string(), Box::new(crate::commands::jobs::Jobs));
         registry.register_builtin("pwd".to_string(), Box::new(Pwd));
 

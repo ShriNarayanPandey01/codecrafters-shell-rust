@@ -18,6 +18,7 @@ pub struct ShellContext {
     pub previous_exit_code: i32,
     pub completions: CompletionRegistry,
     pub background_jobs: Vec<BackgroundJob>,
+    pub history: Vec<String>,
 }
 
 impl ShellContext {
@@ -27,6 +28,7 @@ impl ShellContext {
             previous_exit_code: 0,
             completions,
             background_jobs: Vec::new(),
+            history: Vec::new(),
         }
     }
 

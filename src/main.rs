@@ -3,6 +3,7 @@ mod commands {
     pub mod complete;
     pub mod echo;
     pub mod exit;
+    pub mod history;
     pub mod jobs;
     pub mod pwd;
 }
@@ -790,6 +791,9 @@ fn main() {
                 continue;
             }
         };
+
+        // Add command to history
+        context.history.push(input.clone());
 
         let mut stdout = io::stdout().lock();
         let mut stderr = io::stderr().lock();
