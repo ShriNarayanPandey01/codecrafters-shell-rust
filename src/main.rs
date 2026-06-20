@@ -25,6 +25,9 @@ mod shell {
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use lexers::lexer::Lexer;
 use parser::ast::ASTNode;
 use parser::parser::Parser;
@@ -80,12 +83,33 @@ fn find_command_in_path(command: &str) -> Option<PathBuf> {
 
     std::env::split_paths(&path_var).find_map(|directory| {
         let candidate = directory.join(command);
-        if candidate.is_file() {
+        if is_executable_file(&candidate) {
             Some(candidate)
         } else {
             None
         }
     })
+}
+
+fn is_executable_file(path: &PathBuf) -> bool {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => return false,
+    };
+
+    if !metadata.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        metadata.permissions().mode() & 0o111 != 0
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn main() {
