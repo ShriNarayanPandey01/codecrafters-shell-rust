@@ -24,9 +24,12 @@ mod shell {
 
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::process::Command;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 use lexers::lexer::Lexer;
 use parser::ast::ASTNode;
@@ -56,10 +59,12 @@ fn execute_command(
         return run_type_command(args, registry);
     }
 
-    let command = registry
-        .get_builtin(name)
-        .ok_or_else(|| format!("{name}: not found"))?;
-    command.execute(args.to_vec(), context)
+    if let Some(command) = registry.get_builtin(name) {
+        return command.execute(args.to_vec(), context);
+    }
+
+    let executable_path = find_command_in_path(name).ok_or_else(|| format!("{name}: not found"))?;
+    run_external_command(name, args, executable_path)
 }
 
 fn run_type_command(args: &[String], registry: &CommandRegistry) -> Result<(), String> {
@@ -110,6 +115,19 @@ fn is_executable_file(path: &PathBuf) -> bool {
     {
         true
     }
+}
+
+fn run_external_command(name: &str, args: &[String], executable_path: PathBuf) -> Result<(), String> {
+    let mut command = Command::new(executable_path);
+    command.args(args);
+
+    #[cfg(unix)]
+    command.arg0(name);
+
+    command
+        .status()
+        .map(|_| ())
+        .map_err(|error| format!("failed to execute {name}: {error}"))
 }
 
 fn main() {
