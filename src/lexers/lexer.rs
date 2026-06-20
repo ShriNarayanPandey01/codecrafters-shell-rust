@@ -11,6 +11,15 @@ impl Lexer {
 
         while let Some(ch) = chars.next() {
             match ch {
+                '\\' => {
+                    if let Some(escaped_char) = chars.next() {
+                        building_word = true;
+                        current_word.push(escaped_char);
+                    } else {
+                        building_word = true;
+                        current_word.push('\\');
+                    }
+                }
                 '\'' => {
                     building_word = true;
                     for quoted_char in chars.by_ref() {
