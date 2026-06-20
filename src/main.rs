@@ -320,13 +320,108 @@ fn extract_command_info(
 
 /// Execute multi-stage pipeline with more than 2 commands
 fn execute_multi_stage_pipeline(
-    _commands: &[ASTNode],
-    _registry: &CommandRegistry,
+    commands: &[ASTNode],
+    registry: &CommandRegistry,
     _context: &mut ShellContext,
 ) -> Result<(), String> {
-    // For now, we focus on 2-stage pipelines as per requirements
-    // This function can be extended for longer pipelines
-    Err("pipelines with more than 2 commands not yet supported".to_string())
+    if commands.is_empty() {
+        return Err("empty pipeline".to_string());
+    }
+
+    if commands.len() <= 2 {
+        // This shouldn't happen, but handle it
+        return execute_pipeline_stages(commands, registry, _context);
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::FromRawFd;
+
+        // For pipelines with more than 2 commands, we create N-1 pipes for N commands
+        let num_commands = commands.len();
+        let num_pipes = num_commands - 1;
+
+        // Create all pipes first
+        let mut pipes: Vec<(i32, i32)> = Vec::with_capacity(num_pipes);
+        for _ in 0..num_pipes {
+            let mut fds: [libc::c_int; 2] = [0; 2];
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+                return Err("failed to create pipe".to_string());
+            }
+            pipes.push((fds[0], fds[1])); // (read_fd, write_fd)
+        }
+
+        let mut children = Vec::new();
+
+        // Spawn all commands
+        for (i, cmd) in commands.iter().enumerate() {
+            let execution = flatten_command_execution(cmd)?;
+            let (cmd_name, cmd_args, _is_builtin) = extract_command_info(&execution.command, registry)?;
+
+            // For multi-stage pipelines, only support external commands for now
+            if cmd_name == "type" || registry.get_builtin(&cmd_name).is_some() {
+                return Err("built-in commands in multi-stage pipelines not yet supported".to_string());
+            }
+
+            let path = find_command_in_path(&cmd_name)
+                .ok_or_else(|| format!("{cmd_name}: not found"))?;
+
+            let mut cmd_obj = Command::new(path);
+            cmd_obj.args(&cmd_args);
+
+            #[cfg(unix)]
+            cmd_obj.arg0(&cmd_name);
+
+            // Set stdin (except for first command)
+            if i > 0 {
+                let (read_fd, _) = pipes[i - 1];
+                let stdin_file = unsafe { File::from_raw_fd(read_fd) };
+                cmd_obj.stdin(Stdio::from(stdin_file));
+            }
+
+            // Set stdout (except for last command)
+            if i < num_commands - 1 {
+                let (_, write_fd) = pipes[i];
+                let stdout_file = unsafe { File::from_raw_fd(write_fd) };
+                cmd_obj.stdout(Stdio::from(stdout_file));
+            }
+
+            // Apply redirections if specified
+            if let Some((path, append)) = execution.stdout_redirect {
+                let file = open_redirect_file(&path, append)?;
+                cmd_obj.stdout(Stdio::from(file));
+            }
+
+            if let Some((path, append)) = execution.stderr_redirect {
+                let file = open_redirect_file(&path, append)?;
+                cmd_obj.stderr(Stdio::from(file));
+            }
+
+            let child = cmd_obj
+                .spawn()
+                .map_err(|e| format!("failed to spawn {cmd_name}: {e}"))?;
+
+            children.push(child);
+        }
+
+        // Close all pipe file descriptors in the parent process
+        // (they're already owned by the child processes via Command)
+        drop(pipes);
+
+        // Wait for all children to complete
+        for mut child in children {
+            child
+                .wait()
+                .map_err(|e| format!("failed to wait for child process: {e}"))?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        Err("multi-stage pipelines are only supported on Unix".to_string())
+    }
 }
 
 fn execute_ast(
