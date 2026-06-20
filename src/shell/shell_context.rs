@@ -57,7 +57,7 @@ impl ShellContext {
         let mut statuses = Vec::new();
         let mut remaining_jobs = Vec::new();
 
-        for job in self.background_jobs.drain(..) {
+        for mut job in self.background_jobs.drain(..) {
             match job.child.try_wait() {
                 Ok(Some(_status)) => {
                     statuses.push(BackgroundJobStatus::Done(job.job_id, job.command));
@@ -80,12 +80,6 @@ impl ShellContext {
         });
         statuses
     }
-}
-
-fn current_dir_string() -> String {
-    std::env::current_dir()
-        .map(|path| path.display().to_string())
-        .unwrap_or_default()
 }
 
 fn current_dir_string() -> String {

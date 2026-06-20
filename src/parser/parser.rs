@@ -130,22 +130,5 @@ impl Parser {
         }
 
         Ok(command)
-
-        let name = words
-            .first()
-            .cloned()
-            .ok_or_else(|| "expected command name".to_string())?;
-        let args = words.into_iter().skip(1).collect();
-
-        let mut command = ASTNode::Command { name, args };
-        for (stream, file) in redirects {
-            command = ASTNode::Redirect {
-                command: Box::new(command),
-                file,
-                stream,
-            };
-        }
-
-        Ok(command)
     }
 }
