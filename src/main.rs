@@ -792,8 +792,9 @@ fn main() {
             }
         };
 
-        // Add command to history
+        // Add command to history (both shell history and rustyline history)
         context.history.push(input.clone());
+        let _ = editor.add_history_entry(input.as_str());
 
         let mut stdout = io::stdout().lock();
         let mut stderr = io::stderr().lock();
