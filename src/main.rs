@@ -23,6 +23,7 @@ mod shell {
 }
 
 use std::io::{self, Write};
+use std::path::PathBuf;
 
 use lexers::lexer::Lexer;
 use parser::ast::ASTNode;
@@ -65,11 +66,26 @@ fn run_type_command(args: &[String], registry: &CommandRegistry) -> Result<(), S
 
     if registry.get_builtin(target).is_some() || target == "type" {
         println!("{target} is a shell builtin");
+    } else if let Some(path) = find_command_in_path(target) {
+        println!("{target} is {}", path.display());
     } else {
         println!("{target}: not found");
     }
 
     Ok(())
+}
+
+fn find_command_in_path(command: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+
+    std::env::split_paths(&path_var).find_map(|directory| {
+        let candidate = directory.join(command);
+        if candidate.is_file() {
+            Some(candidate)
+        } else {
+            None
+        }
+    })
 }
 
 fn main() {
