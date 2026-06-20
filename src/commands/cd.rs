@@ -8,7 +8,12 @@ pub struct Cd;
 impl BuiltInCommand for Cd {
     fn execute(&self, args: Vec<String>, context: &mut ShellContext) -> Result<(), String> {
         let target = args.first().ok_or_else(|| "cd: missing argument".to_string())?;
-        let path = Path::new(target);
+        let resolved_target = if target == "~" {
+            std::env::var("HOME").map_err(|_| "cd: HOME not set".to_string())?
+        } else {
+            target.clone()
+        };
+        let path = Path::new(&resolved_target);
 
         std::env::set_current_dir(path)
             .map_err(|_| format!("cd: {target}: No such file or directory"))?;
