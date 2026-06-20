@@ -52,6 +52,7 @@ use rustyline::history::DefaultHistory;
 use shell::autocomplete::ShellAutocomplete;
 use shell::completion_registry::CompletionRegistry;
 use shell::shell_context::{BackgroundJobStatus, ShellContext};
+use std::collections::HashMap;
 
 /// Execute a pipeline (connected commands with |)
 fn execute_pipe(
@@ -748,6 +749,94 @@ fn reap_and_print_done_jobs(context: &mut ShellContext, stdout: &mut dyn Write) 
     Ok(())
 }
 
+/// Expand `$VAR` and `${VAR}` references in a string using the given variables map.
+fn expand_variable_in_string(s: &str, variables: &HashMap<String, String>) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '$' {
+            if chars.peek() == Some(&'{') {
+                // ${VAR} form
+                chars.next(); // consume '{'
+                let mut var_name = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c == '}' {
+                        chars.next(); // consume '}'
+                        break;
+                    }
+                    var_name.push(c);
+                    chars.next();
+                }
+                if let Some(value) = variables.get(&var_name) {
+                    result.push_str(value);
+                }
+                // If not set, expands to empty string (push nothing)
+            } else {
+                // $VAR form — name is [a-zA-Z_][a-zA-Z0-9_]*
+                let mut var_name = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c.is_alphanumeric() || c == '_' {
+                        // First char must be alpha or underscore
+                        if var_name.is_empty() && c.is_ascii_digit() {
+                            break;
+                        }
+                        var_name.push(c);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if var_name.is_empty() {
+                    // Bare '$' with no valid name following — keep it literal
+                    result.push('$');
+                } else if let Some(value) = variables.get(&var_name) {
+                    result.push_str(value);
+                }
+                // If not set, expands to empty string (push nothing)
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
+/// Recursively expand variables in an AST node.
+fn expand_variables_in_ast(node: ASTNode, variables: &HashMap<String, String>) -> ASTNode {
+    match node {
+        ASTNode::Command { name, args } => {
+            let expanded_name = expand_variable_in_string(&name, variables);
+            let expanded_args: Vec<String> = args
+                .into_iter()
+                .map(|a| expand_variable_in_string(&a, variables))
+                .filter(|a| !a.is_empty())
+                .collect();
+            ASTNode::Command {
+                name: expanded_name,
+                args: expanded_args,
+            }
+        }
+        ASTNode::Pipe { left, right } => ASTNode::Pipe {
+            left: Box::new(expand_variables_in_ast(*left, variables)),
+            right: Box::new(expand_variables_in_ast(*right, variables)),
+        },
+        ASTNode::Redirect {
+            command,
+            file,
+            stream,
+        } => ASTNode::Redirect {
+            command: Box::new(expand_variables_in_ast(*command, variables)),
+            file: expand_variable_in_string(&file, variables),
+            stream,
+        },
+        ASTNode::Background { command } => ASTNode::Background {
+            command: Box::new(expand_variables_in_ast(*command, variables)),
+        },
+    }
+}
+
 fn main() {
     let registry = CommandRegistry::new();
     let completions = CompletionRegistry::new();
@@ -799,6 +888,9 @@ fn main() {
                 continue;
             }
         };
+
+        // Expand $VAR and ${VAR} references before execution
+        let ast = expand_variables_in_ast(ast, &context.variables);
 
         // Add command to history (both shell history and rustyline history)
         context.history.push(input.clone());
