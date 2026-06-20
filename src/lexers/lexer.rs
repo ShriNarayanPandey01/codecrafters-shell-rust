@@ -32,13 +32,7 @@ impl Lexer {
                 }
                 '"' => {
                     building_word = true;
-                    for quoted_char in chars.by_ref() {
-                        if quoted_char == '"' {
-                            break;
-                        }
-
-                        current_word.push(quoted_char);
-                    }
+                    Self::consume_double_quoted(&mut chars, &mut current_word);
                 }
                 ' ' | '\t' | '\n' | '\r' => {
                     if building_word {
@@ -73,5 +67,28 @@ impl Lexer {
         }
 
         tokens
+    }
+
+    fn consume_double_quoted(
+        chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+        current_word: &mut String,
+    ) {
+        while let Some(quoted_char) = chars.next() {
+            match quoted_char {
+                '"' => break,
+                '\\' => match chars.peek() {
+                    Some('"') | Some('\\') => {
+                        if let Some(escaped_char) = chars.next() {
+                            current_word.push(escaped_char);
+                        }
+                    }
+                    Some(_) => {
+                        current_word.push('\\');
+                    }
+                    None => current_word.push('\\'),
+                },
+                _ => current_word.push(quoted_char),
+            }
+        }
     }
 }
