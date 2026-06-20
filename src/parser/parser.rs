@@ -75,6 +75,16 @@ impl Parser {
                     index += 2;
                     continue;
                 }
+                Token::RedirectStderrAppend => {
+                    let file = tokens
+                        .get(index + 1)
+                        .and_then(Token::as_word)
+                        .ok_or_else(|| "expected file after redirection".to_string())?;
+
+                    redirects.push((RedirectStream::StderrAppend, file.to_string()));
+                    index += 2;
+                    continue;
+                }
                 Token::Semicolon => return Err("sequences are not supported yet".to_string()),
                 Token::Ampersand => return Err("background jobs are not supported yet".to_string()),
                 Token::LeftParen | Token::RightParen => {

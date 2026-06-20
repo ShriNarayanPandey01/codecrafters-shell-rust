@@ -58,8 +58,8 @@ fn execute_ast(
         Some((path, append)) => Some(open_redirect_file(path, *append)?),
         None => None,
     };
-    let mut redirected_stderr = match execution.stderr_file.as_deref() {
-        Some(path) => Some(File::create(path).map_err(|error| error.to_string())?),
+    let mut redirected_stderr = match execution.stderr_redirect.as_ref() {
+        Some((path, append)) => Some(open_redirect_file(path, *append)?),
         None => None,
     };
 
@@ -87,10 +87,11 @@ fn execute_ast(
     };
 
     match command_result {
-        Err(error) if execution.stderr_file.is_some() => {
+        Err(error) if execution.stderr_redirect.is_some() => {
             if !error.is_empty() {
-                let path = execution.stderr_file.as_deref().unwrap();
-                let mut error_file = File::create(path).map_err(|write_error| write_error.to_string())?;
+                let (path, append) = execution.stderr_redirect.as_ref().unwrap();
+                let mut error_file = open_redirect_file(path, *append)
+                    .map_err(|write_error| write_error.to_string())?;
                 writeln!(error_file, "{error}").map_err(|write_error| write_error.to_string())?;
             }
             Err(String::new())
@@ -204,13 +205,13 @@ fn run_external_command(
 struct CommandExecution<'a> {
     command: &'a ASTNode,
     stdout_redirect: Option<(String, bool)>,
-    stderr_file: Option<String>,
+    stderr_redirect: Option<(String, bool)>,
 }
 
 fn flatten_command_execution(node: &ASTNode) -> Result<CommandExecution<'_>, String> {
     let mut current = node;
     let mut stdout_redirect = None;
-    let mut stderr_file = None;
+    let mut stderr_redirect = None;
 
     loop {
         match current {
@@ -222,7 +223,8 @@ fn flatten_command_execution(node: &ASTNode) -> Result<CommandExecution<'_>, Str
                 match stream {
                     RedirectStream::Stdout => stdout_redirect = Some((file.clone(), false)),
                     RedirectStream::StdoutAppend => stdout_redirect = Some((file.clone(), true)),
-                    RedirectStream::Stderr => stderr_file = Some(file.clone()),
+                    RedirectStream::Stderr => stderr_redirect = Some((file.clone(), false)),
+                    RedirectStream::StderrAppend => stderr_redirect = Some((file.clone(), true)),
                 }
                 current = command;
             }
@@ -230,7 +232,7 @@ fn flatten_command_execution(node: &ASTNode) -> Result<CommandExecution<'_>, Str
                 return Ok(CommandExecution {
                     command: current,
                     stdout_redirect,
-                    stderr_file,
+                    stderr_redirect,
                 });
             }
             ASTNode::Pipe { .. } => return Err("pipes are parsed but not executed yet".to_string()),

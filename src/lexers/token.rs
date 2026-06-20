@@ -5,6 +5,7 @@ pub enum Token {
     RedirectStdout,
     RedirectStdoutAppend,
     RedirectStderr,
+    RedirectStderrAppend,
     Pipe,
     Semicolon,
     Ampersand,

@@ -11,6 +11,15 @@ impl Lexer {
 
         while let Some(ch) = chars.next() {
             match ch {
+                '2' if !building_word && chars.peek() == Some(&'>') => {
+                    chars.next();
+                    if chars.peek() == Some(&'>') {
+                        chars.next();
+                        tokens.push(Token::RedirectStderrAppend);
+                    } else {
+                        tokens.push(Token::RedirectStderr);
+                    }
+                }
                 '1' if !building_word && chars.peek() == Some(&'>') => {
                     chars.next();
                     if chars.peek() == Some(&'>') {
@@ -19,10 +28,6 @@ impl Lexer {
                     } else {
                         tokens.push(Token::RedirectStdout);
                     }
-                }
-                '2' if !building_word && chars.peek() == Some(&'>') => {
-                    chars.next();
-                    tokens.push(Token::RedirectStderr);
                 }
                 '>' => {
                     if building_word {

@@ -3,6 +3,7 @@ pub enum RedirectStream {
     Stdout,
     StdoutAppend,
     Stderr,
+    StderrAppend,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
