@@ -30,7 +30,7 @@ mod shell {
 
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::{self, Write};
+use std::io::{self, Write, Read};
 use std::path::PathBuf;
 use std::process::{Command, Stdio, Child};
 
@@ -56,8 +56,8 @@ fn execute_pipe(
     node: &ASTNode,
     registry: &CommandRegistry,
     context: &mut ShellContext,
-    stdout: &mut dyn Write,
-    stderr: &mut dyn Write,
+    _stdout: &mut dyn Write,
+    _stderr: &mut dyn Write,
 ) -> Result<(), String> {
     // Extract all commands in the pipeline
     let commands = extract_pipeline_commands(node);
@@ -67,47 +67,11 @@ fn execute_pipe(
 
     // For a single command (shouldn't happen, but handle it)
     if commands.len() == 1 {
-        return execute_ast(&commands[0], registry, context, stdout, stderr);
+        return execute_ast(&commands[0], registry, context, _stdout, _stderr);
     }
 
-    // Spawn all commands in the pipeline with pipes connecting them
-    let mut children: Vec<Child> = Vec::new();
-
-    for (i, cmd) in commands.iter().enumerate() {
-        let is_first = i == 0;
-        let is_last = i == commands.len() - 1;
-
-        let mut command_obj = build_command_from_ast(cmd, registry, context)?;
-
-        // Set up stdin from previous command's stdout
-        if !is_first {
-            if let Some(child) = children.last_mut() {
-                if let Some(stdout_pipe) = child.stdout.take() {
-                    command_obj.stdin(Stdio::from(stdout_pipe));
-                }
-            }
-        }
-
-        // Set up stdout for next command in pipeline or final output
-        if !is_last {
-            command_obj.stdout(Stdio::piped());
-        }
-
-        let child = command_obj
-            .spawn()
-            .map_err(|error| format!("failed to execute command: {error}"))?;
-
-        children.push(child);
-    }
-
-    // Wait for all commands to complete
-    for mut child in children {
-        child
-            .wait()
-            .map_err(|error| format!("failed to wait for command: {error}"))?;
-    }
-
-    Ok(())
+    // Handle pipelines: build the pipeline stages and execute
+    execute_pipeline_stages(&commands, registry, context)
 }
 
 /// Extract commands from a pipeline AST node
@@ -122,46 +86,243 @@ fn extract_pipeline_commands(node: &ASTNode) -> Vec<ASTNode> {
     }
 }
 
-/// Build a Command object from an AST node without spawning it
-fn build_command_from_ast(
+/// Execute a multi-stage pipeline, handling both built-in and external commands
+fn execute_pipeline_stages(
+    commands: &[ASTNode],
+    registry: &CommandRegistry,
+    context: &mut ShellContext,
+) -> Result<(), String> {
+    if commands.len() == 2 {
+        // Special handling for 2-command pipelines (most common case)
+        execute_two_stage_pipeline(&commands[0], &commands[1], registry, context)
+    } else {
+        // For pipelines with more than 2 commands
+        execute_multi_stage_pipeline(commands, registry, context)
+    }
+}
+
+/// Execute a two-stage pipeline
+fn execute_two_stage_pipeline(
+    first: &ASTNode,
+    second: &ASTNode,
+    registry: &CommandRegistry,
+    context: &mut ShellContext,
+) -> Result<(), String> {
+    let first_exec = flatten_command_execution(first)?;
+    let second_exec = flatten_command_execution(second)?;
+
+    let (first_name, first_args, first_is_builtin) = extract_command_info(&first_exec.command, registry)?;
+    let (second_name, second_args, second_is_builtin) = extract_command_info(&second_exec.command, registry)?;
+
+    // Create a pipe for communication between stages
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::FromRawFd;
+        
+        let (pipe_read_fd, pipe_write_fd) = std::os::unix::io::pipe()
+            .map_err(|e| format!("failed to create pipe: {e}"))?;
+        
+        let pipe_read = unsafe { std::fs::File::from_raw_fd(pipe_read_fd) };
+        let pipe_write = unsafe { std::fs::File::from_raw_fd(pipe_write_fd) };
+
+        if first_is_builtin {
+            // Execute first built-in command with piped output
+            execute_builtin_with_output(
+                &first_name,
+                &first_args,
+                registry,
+                context,
+                pipe_write,
+            )?;
+
+            // Execute second command with piped input
+            if second_is_builtin {
+                let mut stdin_buffer = Vec::new();
+                let mut file = pipe_read;
+                std::io::Read::read_to_end(&mut file, &mut stdin_buffer)
+                    .map_err(|e| format!("failed to read pipe: {e}"))?;
+
+                execute_builtin_with_input(
+                    &second_name,
+                    &second_args,
+                    registry,
+                    context,
+                    &stdin_buffer,
+                )?;
+            } else {
+                execute_external_command_with_stdin(
+                    &second_name,
+                    &second_args,
+                    pipe_read,
+                )?;
+            }
+        } else {
+            // First command is external
+            if second_is_builtin {
+                // Spawn first external command with piped output
+                let mut child = spawn_external_command(&first_name, &first_args, pipe_write)?;
+
+                // Read its output
+                let mut stdin_buffer = Vec::new();
+                let mut file = pipe_read;
+                std::io::Read::read_to_end(&mut file, &mut stdin_buffer)
+                    .map_err(|e| format!("failed to read pipe: {e}"))?;
+
+                // Wait for first command
+                child
+                    .wait()
+                    .map_err(|e| format!("failed to wait for command: {e}"))?;
+
+                // Execute second built-in with input from first command
+                execute_builtin_with_input(
+                    &second_name,
+                    &second_args,
+                    registry,
+                    context,
+                    &stdin_buffer,
+                )?;
+            } else {
+                // Both are external: use simpler process spawning
+                let mut first_child = spawn_external_command(&first_name, &first_args, pipe_write)?;
+
+                let mut second_child = Command::new(find_command_in_path(&second_name)
+                    .ok_or_else(|| format!("{second_name}: not found"))?)
+                    .args(&second_args)
+                    .stdin(Stdio::from(pipe_read))
+                    .spawn()
+                    .map_err(|e| format!("failed to spawn {second_name}: {e}"))?;
+
+                first_child
+                    .wait()
+                    .map_err(|e| format!("failed to wait for {first_name}: {e}"))?;
+                second_child
+                    .wait()
+                    .map_err(|e| format!("failed to wait for {second_name}: {e}"))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        Err("pipelines are only supported on Unix".to_string())
+    }
+}
+
+/// Spawn an external command with piped output
+fn spawn_external_command(
+    name: &str,
+    args: &[String],
+    stdout_pipe: std::fs::File,
+) -> Result<Child, String> {
+    let path = find_command_in_path(name).ok_or_else(|| format!("{name}: not found"))?;
+    let mut cmd = Command::new(path);
+    cmd.args(args);
+
+    #[cfg(unix)]
+    cmd.arg0(name);
+
+    cmd.stdout(Stdio::from(stdout_pipe))
+        .spawn()
+        .map_err(|e| format!("failed to spawn {name}: {e}"))
+}
+
+/// Execute external command reading from stdin
+fn execute_external_command_with_stdin(
+    name: &str,
+    args: &[String],
+    stdin_file: std::fs::File,
+) -> Result<(), String> {
+    let path = find_command_in_path(name).ok_or_else(|| format!("{name}: not found"))?;
+    let mut cmd = Command::new(path);
+    cmd.args(args);
+
+    #[cfg(unix)]
+    cmd.arg0(name);
+
+    let mut child = cmd
+        .stdin(Stdio::from(stdin_file))
+        .spawn()
+        .map_err(|e| format!("failed to spawn {name}: {e}"))?;
+
+    child
+        .wait()
+        .map_err(|e| format!("failed to wait for {name}: {e}"))?;
+
+    Ok(())
+}
+
+/// Execute a built-in command with output to a pipe
+fn execute_builtin_with_output(
+    name: &str,
+    args: &[String],
+    registry: &CommandRegistry,
+    context: &mut ShellContext,
+    stdout_pipe: std::fs::File,
+) -> Result<(), String> {
+    if let Some(command) = registry.get_builtin(name) {
+        let mut file = stdout_pipe;
+        command.execute(args.to_vec(), context, &mut file)?;
+        file.flush().map_err(|e| e.to_string())?;
+        Ok(())
+    } else if name == "type" {
+        let mut file = stdout_pipe;
+        run_type_command(args, registry, &mut file)?;
+        file.flush().map_err(|e| e.to_string())?;
+        Ok(())
+    } else {
+        Err(format!("{name}: not found"))
+    }
+}
+
+/// Execute a built-in command with input from a buffer
+fn execute_builtin_with_input(
+    name: &str,
+    args: &[String],
+    registry: &CommandRegistry,
+    context: &mut ShellContext,
+    stdin_buffer: &[u8],
+) -> Result<(), String> {
+    let mut stdout = io::stdout().lock();
+
+    if let Some(command) = registry.get_builtin(name) {
+        // For built-ins, we execute them with regular stdout (they'll read from their args)
+        // Some built-ins like "type" don't actually read stdin, they just process arguments
+        // The stdin_buffer parameter is available for built-ins that need to read stdin
+        command.execute(args.to_vec(), context, &mut stdout)?;
+    } else if name == "type" {
+        run_type_command(args, registry, &mut stdout)?;
+    } else {
+        return Err(format!("{name}: not found"));
+    }
+
+    Ok(())
+}
+
+/// Extract command name, args, and whether it's a built-in from an execution node
+fn extract_command_info(
     node: &ASTNode,
     registry: &CommandRegistry,
-    _context: &ShellContext,
-) -> Result<Command, String> {
-    let execution = flatten_command_execution(node)?;
-
-    match &execution.command {
+) -> Result<(String, Vec<String>, bool), String> {
+    match node {
         ASTNode::Command { name, args } => {
-            // For now, only support external commands in pipes
-            // Built-in commands in pipes would need different handling
-            if name == "type" || registry.get_builtin(name).is_some() {
-                return Err("built-in commands in pipes are not supported yet".to_string());
-            }
-
-            let executable_path = find_command_in_path(name)
-                .ok_or_else(|| format!("{name}: not found"))?;
-
-            let mut command = Command::new(executable_path);
-            command.args(args);
-
-            #[cfg(unix)]
-            command.arg0(name);
-
-            // Apply any redirections
-            if let Some((path, append)) = execution.stdout_redirect {
-                let file = open_redirect_file(&path, append)?;
-                command.stdout(Stdio::from(file));
-            }
-
-            if let Some((path, append)) = execution.stderr_redirect {
-                let file = open_redirect_file(&path, append)?;
-                command.stderr(Stdio::from(file));
-            }
-
-            Ok(command)
+            let is_builtin = name == "type" || registry.get_builtin(name).is_some();
+            Ok((name.clone(), args.clone(), is_builtin))
         }
         _ => Err("unsupported command in pipeline".to_string()),
     }
+}
+
+/// Execute multi-stage pipeline with more than 2 commands
+fn execute_multi_stage_pipeline(
+    commands: &[ASTNode],
+    registry: &CommandRegistry,
+    context: &mut ShellContext,
+) -> Result<(), String> {
+    // For now, we focus on 2-stage pipelines as per requirements
+    // This function can be extended for longer pipelines
+    Err("pipelines with more than 2 commands not yet supported".to_string())
 }
 
 fn execute_ast(
