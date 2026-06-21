@@ -47,6 +47,20 @@ You'll be greeted with the shell prompt:
 $
 ```
 
+### Showcase
+
+A showcase script (`showcase.sh`) is included to quickly demonstrate the shell's core features. 
+
+**On Linux / macOS / Git Bash:**
+```bash
+cargo run < showcase.sh
+```
+
+**On Windows PowerShell:**
+```powershell
+Get-Content showcase.sh | cargo run
+```
+
 ---
 
 ## 📖 Usage
