@@ -1,5 +1,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
+use std::process::{Command, Stdio};
 
 use crate::commands::external::{
     BackgroundCommandRequest, ExternalCommandIo, find_command_in_path, run_external_command,
@@ -280,9 +282,7 @@ fn execute_two_stage_pipeline(
             execute_external_command_with_stdin, spawn_external_command,
         };
         use std::io::Read;
-        use std::io::Write;
         use std::os::unix::io::FromRawFd;
-        use std::process::{Command, Stdio};
 
         let mut fds: [libc::c_int; 2] = [0; 2];
         if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
