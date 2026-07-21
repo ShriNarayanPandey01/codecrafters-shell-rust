@@ -36,6 +36,8 @@ use rustyline::history::DefaultHistory;
 use shell::autocomplete::ShellAutocomplete;
 
 fn main() {
+    load_env_file();
+
     let args: Vec<String> = std::env::args().collect();
     let (startup_path, args) = parse_startup_args(&args[1..]);
 
@@ -189,4 +191,31 @@ fn parse_startup_args(args: &[String]) -> (Option<PathBuf>, Vec<String>) {
     }
 
     (startup_path, remaining_args)
+}
+
+fn load_env_file() {
+    let Ok(contents) = std::fs::read_to_string(".env") else {
+        return;
+    };
+
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+
+        let key = key.trim();
+        if key.is_empty() || std::env::var_os(key).is_some() {
+            continue;
+        }
+
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        unsafe {
+            std::env::set_var(key, value);
+        }
+    }
 }

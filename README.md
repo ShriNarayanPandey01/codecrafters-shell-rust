@@ -57,6 +57,21 @@ cargo run -- serve 7878
 
 By default the API binds to `0.0.0.0` and will also honor the `PORT` environment variable when no explicit port argument is provided. Set `BYOSHELL_HOST` if you want to override the bind address.
 
+The HTTP server requires `BYOSHELL_API_KEY` to be set before it will start:
+
+```bash
+BYOSHELL_API_KEY="replace-this-with-a-secret" cargo run -- serve 7878
+```
+
+Optional rate limiting environment variables:
+
+```bash
+BYOSHELL_RATE_LIMIT_MAX_REQUESTS=60
+BYOSHELL_RATE_LIMIT_WINDOW_SECS=60
+```
+
+`GET /health` stays public for health checks. Other endpoints require either `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+
 You'll be greeted with the shell prompt:
 
 ```
@@ -103,6 +118,12 @@ The same shell engine can now be used through HTTP, which makes it easy to conne
 
 `POST /execute`
 
+Authentication required:
+
+```http
+Authorization: Bearer your-secret-api-key
+```
+
 ### Request Body
 
 ```json
@@ -135,6 +156,17 @@ You can also send plain text instead of JSON. In that case, the server uses the 
 
 `GET /health`
 
+This endpoint is intentionally left unauthenticated so hosting providers such as Render can probe the service.
+
+### Rate Limiting
+
+Authenticated requests are rate limited in memory by client IP address. The defaults are:
+
+- `60` requests
+- per `60` seconds
+
+You can override that with `BYOSHELL_RATE_LIMIT_MAX_REQUESTS` and `BYOSHELL_RATE_LIMIT_WINDOW_SECS`.
+
 ### Portfolio Frontend Example
 
 ```js
@@ -143,6 +175,7 @@ async function runShellCommand(command) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "Authorization": "Bearer your-secret-api-key",
     },
     body: JSON.stringify({
       session_id: "portfolio",
