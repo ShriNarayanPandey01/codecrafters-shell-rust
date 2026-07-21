@@ -30,4 +30,15 @@ impl CompletionRegistry {
     pub fn is_disabled(&self, command: &str) -> bool {
         self.disabled.borrow().contains(command)
     }
+
+    pub fn entries(&self) -> Vec<(String, String)> {
+        let mut entries = self
+            .specs
+            .borrow()
+            .iter()
+            .map(|(command, script)| (command.clone(), script.clone()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
 }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Child;
 
 use crate::shell::completion_registry::CompletionRegistry;
@@ -18,6 +19,8 @@ pub enum BackgroundJobStatus {
 pub struct ShellContext {
     pub current_dir: String,
     pub previous_exit_code: i32,
+    pub should_exit: bool,
+    pub requested_exit_code: i32,
     pub completions: CompletionRegistry,
     pub background_jobs: Vec<BackgroundJob>,
     pub history: Vec<String>,
@@ -30,6 +33,8 @@ impl ShellContext {
         Self {
             current_dir: current_dir_string(),
             previous_exit_code: 0,
+            should_exit: false,
+            requested_exit_code: 0,
             completions,
             background_jobs: Vec::new(),
             history: Vec::new(),
@@ -64,8 +69,21 @@ impl ShellContext {
         fs::write(path, content).map_err(|e| format!("Error writing history file: {}", e))
     }
 
-    pub fn refresh_current_dir(&mut self) {
-        self.current_dir = current_dir_string();
+    pub fn current_dir_path(&self) -> PathBuf {
+        PathBuf::from(&self.current_dir)
+    }
+
+    pub fn resolve_path(&self, path: &str) -> PathBuf {
+        let target = Path::new(path);
+        if target.is_absolute() {
+            target.to_path_buf()
+        } else {
+            self.current_dir_path().join(target)
+        }
+    }
+
+    pub fn set_current_dir_path(&mut self, path: PathBuf) {
+        self.current_dir = normalize_display_path(&path);
     }
 
     pub fn next_job_id(&self) -> usize {
@@ -97,11 +115,17 @@ impl ShellContext {
                     statuses.push(BackgroundJobStatus::Done(job.job_id, job.command));
                 }
                 Ok(None) => {
-                    statuses.push(BackgroundJobStatus::Running(job.job_id, job.command.clone()));
+                    statuses.push(BackgroundJobStatus::Running(
+                        job.job_id,
+                        job.command.clone(),
+                    ));
                     remaining_jobs.push(job);
                 }
                 Err(_) => {
-                    statuses.push(BackgroundJobStatus::Running(job.job_id, job.command.clone()));
+                    statuses.push(BackgroundJobStatus::Running(
+                        job.job_id,
+                        job.command.clone(),
+                    ));
                     remaining_jobs.push(job);
                 }
             }
@@ -118,6 +142,14 @@ impl ShellContext {
 
 fn current_dir_string() -> String {
     std::env::current_dir()
-        .map(|path| path.display().to_string())
+        .map(|path| normalize_display_path(&path))
         .unwrap_or_default()
+}
+
+fn normalize_display_path(path: &Path) -> String {
+    let rendered = path.display().to_string();
+    rendered
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&rendered)
+        .to_string()
 }

@@ -1,4 +1,5 @@
 mod commands;
+mod engine;
 
 mod lexers {
     pub mod lexer;
@@ -7,6 +8,7 @@ mod lexers {
 
 mod parser {
     pub mod ast;
+    #[allow(clippy::module_inception)]
     pub mod parser;
 }
 
@@ -21,116 +23,75 @@ mod shell {
     pub mod shell_context;
 }
 
-use std::io::{self, Write};
+mod server;
 
-use commands::execution::{execute_ast, reap_and_print_done_jobs};
-use lexers::lexer::Lexer;
-use parser::ast::ASTNode;
-use parser::parser::Parser;
-use registry::command_registry::CommandRegistry;
+use std::io::{self, Write};
+use std::path::PathBuf;
+
+use engine::ShellEngine;
 use rustyline::Editor;
 use rustyline::config::{BellStyle, CompletionType, Config};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use shell::autocomplete::ShellAutocomplete;
-use shell::completion_registry::CompletionRegistry;
-use shell::shell_context::ShellContext;
-use std::collections::HashMap;
-
-/// Expand `$VAR` and `${VAR}` references in a string using the given variables map.
-fn expand_variable_in_string(s: &str, variables: &HashMap<String, String>) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '$' {
-            if chars.peek() == Some(&'{') {
-                // ${VAR} form
-                chars.next(); // consume '{'
-                let mut var_name = String::new();
-                while let Some(&c) = chars.peek() {
-                    if c == '}' {
-                        chars.next(); // consume '}'
-                        break;
-                    }
-                    var_name.push(c);
-                    chars.next();
-                }
-                if let Some(value) = variables.get(&var_name) {
-                    result.push_str(value);
-                }
-                // If not set, expands to empty string (push nothing)
-            } else {
-                // $VAR form — name is [a-zA-Z_][a-zA-Z0-9_]*
-                let mut var_name = String::new();
-                while let Some(&c) = chars.peek() {
-                    if c.is_alphanumeric() || c == '_' {
-                        // First char must be alpha or underscore
-                        if var_name.is_empty() && c.is_ascii_digit() {
-                            break;
-                        }
-                        var_name.push(c);
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                if var_name.is_empty() {
-                    // Bare '$' with no valid name following — keep it literal
-                    result.push('$');
-                } else if let Some(value) = variables.get(&var_name) {
-                    result.push_str(value);
-                }
-                // If not set, expands to empty string (push nothing)
-            }
-        } else {
-            result.push(ch);
-        }
-    }
-
-    result
-}
-
-/// Recursively expand variables in an AST node.
-fn expand_variables_in_ast(node: ASTNode, variables: &HashMap<String, String>) -> ASTNode {
-    match node {
-        ASTNode::Command { name, args } => {
-            let expanded_name = expand_variable_in_string(&name, variables);
-            let expanded_args: Vec<String> = args
-                .into_iter()
-                .map(|a| expand_variable_in_string(&a, variables))
-                .filter(|a| !a.is_empty())
-                .collect();
-            ASTNode::Command {
-                name: expanded_name,
-                args: expanded_args,
-            }
-        }
-        ASTNode::Pipe { left, right } => ASTNode::Pipe {
-            left: Box::new(expand_variables_in_ast(*left, variables)),
-            right: Box::new(expand_variables_in_ast(*right, variables)),
-        },
-        ASTNode::Redirect {
-            command,
-            file,
-            stream,
-        } => ASTNode::Redirect {
-            command: Box::new(expand_variables_in_ast(*command, variables)),
-            file: expand_variable_in_string(&file, variables),
-            stream,
-        },
-        ASTNode::Background { command } => ASTNode::Background {
-            command: Box::new(expand_variables_in_ast(*command, variables)),
-        },
-    }
-}
 
 fn main() {
-    let registry = CommandRegistry::new();
-    let completions = CompletionRegistry::new();
-    let mut context = ShellContext::new(completions.clone());
+    let args: Vec<String> = std::env::args().collect();
+    let (startup_path, args) = parse_startup_args(&args[1..]);
 
-    // Load history from HISTFILE if it exists
+    if let Some(path) = startup_path {
+        let path = if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|error| {
+                    let mut stderr = io::stderr().lock();
+                    let _ = writeln!(stderr, "failed to resolve --path: {error}");
+                    std::process::exit(1);
+                })
+                .join(path)
+        };
+
+        if !path.is_dir() {
+            let mut stderr = io::stderr().lock();
+            let _ = writeln!(
+                stderr,
+                "invalid --path value: '{}' is not a directory",
+                path.display()
+            );
+            std::process::exit(1);
+        }
+
+        let mut paths = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .collect::<Vec<_>>();
+
+        if !paths.contains(&path) {
+            paths.insert(0, path);
+        }
+
+        let path_value = std::env::join_paths(paths).unwrap_or_else(|error| {
+            let mut stderr = io::stderr().lock();
+            let _ = writeln!(stderr, "failed to set PATH: {error}");
+            std::process::exit(1);
+        });
+
+        unsafe {
+            std::env::set_var("PATH", path_value);
+        }
+    }
+
+    if let Some((host, port)) = parse_server_args(&args) {
+        if let Err(error) = server::run_server(&host, port) {
+            let mut stderr = io::stderr().lock();
+            let _ = writeln!(stderr, "{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    let engine = ShellEngine::new();
+    let mut context = engine.new_context();
+
     let histfile = std::env::var("HISTFILE").ok();
     if let Some(path) = &histfile {
         let _ = context.load_history_from_file(path);
@@ -141,13 +102,11 @@ fn main() {
         .bell_style(BellStyle::Audible)
         .build();
     let mut editor = Editor::<ShellAutocomplete, DefaultHistory>::with_config(config).unwrap();
-    editor.set_helper(Some(ShellAutocomplete::new(completions)));
+    editor.set_helper(Some(ShellAutocomplete::new(engine.completions())));
+
+    let mut final_exit_code = 0;
 
     loop {
-        let mut stdout = io::stdout().lock();
-        let _ = reap_and_print_done_jobs(&mut context, &mut stdout);
-        drop(stdout);
-
         let input = match editor.readline("$ ") {
             Ok(input) => input,
             Err(ReadlineError::Eof) => break,
@@ -157,63 +116,76 @@ fn main() {
             }
             Err(error) => {
                 let mut stderr = io::stderr().lock();
-                writeln!(stderr, "{error}").unwrap();
+                let _ = writeln!(stderr, "{error}");
                 break;
             }
         };
 
-        let tokens = Lexer::tokenize(&input);
-        if tokens.is_empty() {
-            continue;
-        }
-
-        let ast = match Parser::parse(tokens) {
-            Ok(ast) => ast,
-            Err(error) => {
-                let mut stderr = io::stderr().lock();
-                writeln!(stderr, "{error}").unwrap();
-                context.previous_exit_code = 1;
-                continue;
-            }
-        };
-
-        // Expand $VAR and ${VAR} references before execution
-        let ast = expand_variables_in_ast(ast, &context.variables);
-
-        // Add command to history (both shell history and rustyline history)
-        context.history.push(input.clone());
         let _ = editor.add_history_entry(input.as_str());
+        let result = engine.execute_line(&mut context, &input);
 
         let mut stdout = io::stdout().lock();
         let mut stderr = io::stderr().lock();
-
-        if let Err(error) = execute_ast(&ast, &registry, &mut context, &mut stdout, &mut stderr) {
-            if !error.is_empty() {
-                writeln!(stderr, "{error}").unwrap();
-            }
-            context.previous_exit_code = 1;
-            drop(stderr);
-            drop(stdout);
-            
-            // Check for completed jobs after command execution
-            let mut stdout = io::stdout().lock();
-            let _ = reap_and_print_done_jobs(&mut context, &mut stdout);
-            drop(stdout);
-            continue;
+        if !result.stdout.is_empty() {
+            let _ = write!(stdout, "{}", result.stdout);
+        }
+        if !result.stderr.is_empty() {
+            let _ = write!(stderr, "{}", result.stderr);
         }
 
-        context.previous_exit_code = 0;
-        drop(stderr);
-        drop(stdout);
-        
-        // Check for completed jobs after command execution
-        let mut stdout = io::stdout().lock();
-        let _ = reap_and_print_done_jobs(&mut context, &mut stdout);
-        drop(stdout);
+        if result.should_exit {
+            final_exit_code = result.exit_code;
+            break;
+        }
     }
 
-    // Save history to HISTFILE on exit
     if let Some(path) = histfile {
         let _ = context.save_history_to_file(&path);
     }
+
+    if final_exit_code != 0 {
+        std::process::exit(final_exit_code);
+    }
+}
+
+fn parse_server_args(args: &[String]) -> Option<(String, u16)> {
+    if args.is_empty() {
+        return None;
+    }
+
+    if !matches!(args[0].as_str(), "serve" | "--serve") {
+        return None;
+    }
+
+    let host = std::env::var("BYOSHELL_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port = args
+        .get(1)
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(7878);
+
+    Some((host, port))
+}
+
+fn parse_startup_args(args: &[String]) -> (Option<PathBuf>, Vec<String>) {
+    let mut startup_path = None;
+    let mut remaining_args = Vec::new();
+    let mut iter = args.iter();
+
+    while let Some(arg) = iter.next() {
+        if arg == "--path" {
+            if let Some(value) = iter.next() {
+                startup_path = Some(PathBuf::from(value));
+            } else {
+                let mut stderr = io::stderr().lock();
+                let _ = writeln!(stderr, "missing value for --path");
+                std::process::exit(1);
+            }
+        } else if let Some(value) = arg.strip_prefix("--path=") {
+            startup_path = Some(PathBuf::from(value));
+        } else {
+            remaining_args.push(arg.clone());
+        }
+    }
+
+    (startup_path, remaining_args)
 }

@@ -19,6 +19,7 @@ impl CommandRegistry {
             builtins: HashMap::new(),
         };
 
+        registry.register_builtin("cat".to_string(), Box::new(crate::commands::cat::Cat));
         registry.register_builtin("cd".to_string(), Box::new(Cd));
         registry.register_builtin("complete".to_string(), Box::new(Complete));
         registry.register_builtin("declare".to_string(), Box::new(Declare));
@@ -26,7 +27,11 @@ impl CommandRegistry {
         registry.register_builtin("exit".to_string(), Box::new(Exit));
         registry.register_builtin("history".to_string(), Box::new(History));
         registry.register_builtin("jobs".to_string(), Box::new(crate::commands::jobs::Jobs));
+        registry.register_builtin("ls".to_string(), Box::new(crate::commands::ls::Ls));
+        registry.register_builtin("mkdir".to_string(), Box::new(crate::commands::mkdir::Mkdir));
         registry.register_builtin("pwd".to_string(), Box::new(Pwd));
+        registry.register_builtin("rm".to_string(), Box::new(crate::commands::rm::Rm));
+        registry.register_builtin("touch".to_string(), Box::new(crate::commands::touch::Touch));
 
         registry
     }
@@ -35,7 +40,7 @@ impl CommandRegistry {
         self.builtins.insert(name, command);
     }
 
-    pub fn get_builtin(&self, name: &str) -> Option<&Box<dyn BuiltInCommand>> {
-        self.builtins.get(name)
+    pub fn get_builtin(&self, name: &str) -> Option<&dyn BuiltInCommand> {
+        self.builtins.get(name).map(Box::as_ref)
     }
 }

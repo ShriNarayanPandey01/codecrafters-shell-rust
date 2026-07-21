@@ -1,5 +1,4 @@
 use std::io::Write;
-use std::path::Path;
 
 use crate::shell::built_in_command::BuiltInCommand;
 use crate::shell::shell_context::ShellContext;
@@ -17,16 +16,21 @@ impl BuiltInCommand for Cd {
             .first()
             .ok_or_else(|| "cd: missing argument".to_string())?;
         let resolved_target = if target == "~" {
-            std::env::var("HOME").map_err(|_| "cd: HOME not set".to_string())?
+            std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .map_err(|_| "cd: HOME not set".to_string())?
         } else {
             target.clone()
         };
-        let path = Path::new(&resolved_target);
-
-        std::env::set_current_dir(path)
+        let absolute_path = context.resolve_path(&resolved_target);
+        let canonical_path = std::fs::canonicalize(&absolute_path)
             .map_err(|_| format!("cd: {target}: No such file or directory"))?;
 
-        context.refresh_current_dir();
+        if !canonical_path.is_dir() {
+            return Err(format!("cd: {target}: No such file or directory"));
+        }
+
+        context.set_current_dir_path(canonical_path);
         Ok(())
     }
 }

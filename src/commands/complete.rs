@@ -13,6 +13,13 @@ impl BuiltInCommand for Complete {
         stdout: &mut dyn Write,
     ) -> Result<(), String> {
         match args.as_slice() {
+            [] => {
+                for (command, script_path) in context.completions.entries() {
+                    writeln!(stdout, "complete -C '{}' {}", script_path, command)
+                        .map_err(|error| error.to_string())?;
+                }
+                Ok(())
+            }
             [flag, command] if flag == "-p" => {
                 if let Some(script_path) = context.completions.get(command) {
                     writeln!(stdout, "complete -C '{script_path}' {command}")
@@ -23,16 +30,27 @@ impl BuiltInCommand for Complete {
                 }
             }
             [flag, script_path, command] if flag == "-C" => {
+                let resolved_path = context.resolve_path(script_path);
+                if !resolved_path.exists() {
+                    return Err(format!(
+                        "complete: {}: no such completion script",
+                        resolved_path.display()
+                    ));
+                }
+
                 context
                     .completions
-                    .register(command.clone(), script_path.clone());
+                    .register(command.clone(), resolved_path.display().to_string());
                 Ok(())
             }
             [flag, command] if flag == "-r" => {
                 context.completions.remove(command);
                 Ok(())
             }
-            _ => Ok(()),
+            _ => Err(
+                "usage: complete [-C script command] | [-p command] | [-r command] | [no args]"
+                    .to_string(),
+            ),
         }
     }
 }

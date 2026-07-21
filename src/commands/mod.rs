@@ -1,3 +1,4 @@
+pub mod cat;
 pub mod cd;
 pub mod complete;
 pub mod declare;
@@ -7,4 +8,8 @@ pub mod exit;
 pub mod external;
 pub mod history;
 pub mod jobs;
+pub mod ls;
+pub mod mkdir;
 pub mod pwd;
+pub mod rm;
+pub mod touch;

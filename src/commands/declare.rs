@@ -43,7 +43,9 @@ impl BuiltInCommand for Declare {
                     return Err(format!("declare: `{}': not a valid identifier", assignment));
                 }
 
-                context.variables.insert(name.to_string(), value.to_string());
+                context
+                    .variables
+                    .insert(name.to_string(), value.to_string());
                 Ok(())
             } else {
                 Err(format!("declare: `{}': not a valid identifier", assignment))
@@ -53,12 +55,10 @@ impl BuiltInCommand for Declare {
 }
 
 fn is_valid_identifier(name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-
     let mut chars = name.chars();
-    let first = chars.next().unwrap();
+    let Some(first) = chars.next() else {
+        return false;
+    };
 
     // First character must be letter or underscore
     if !first.is_alphabetic() && first != '_' {

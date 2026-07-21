@@ -41,7 +41,9 @@ Each input line follows this execution path:
 - loads history from `HISTFILE` if present
 - configures `rustyline`
 - runs the REPL loop
+ - runs the REPL loop
 
+It also supports a small set of command-line options for the shell process itself, for example `--path <dir>` to inject a custom directory into the runtime `PATH` so locally-built executables can be discovered during a session.
 It also contains variable expansion helpers:
 
 - `expand_variable_in_string`
@@ -141,6 +143,7 @@ Responsibilities:
 
 Currently registered built-ins:
 
+- `cat`
 - `cd`
 - `complete`
 - `declare`
@@ -148,7 +151,11 @@ Currently registered built-ins:
 - `exit`
 - `history`
 - `jobs`
+- `ls`
+- `mkdir`
 - `pwd`
+- `rm`
+- `touch`
 
 `type` is handled as a special built-in-like branch in the execution layer.
 
@@ -182,6 +189,11 @@ Built-in behavior summary:
 - `history`: shows, reads, writes, and appends shell history
 - `jobs`: shows tracked background jobs
 - `complete`: registers, removes, or prints completion scripts
+- `cat`: prints the contents of files to stdout
+- `ls`: lists directory contents (basic listing; advanced flags are limited)
+- `mkdir`: creates directories (supports `-p`-like behavior)
+- `rm`: removes files or directories (supports `-r` for recursive removal)
+- `touch`: creates an empty file or updates file timestamps
 
 #### `execution.rs`
 
@@ -365,6 +377,8 @@ Platform note:
 
 - pipe execution is implemented under `#[cfg(unix)]`
 - non-Unix builds reject pipeline execution
+
+Note: the shell provides POSIX-like behavior but not all flags/constructs are supported on Windows. Certain command flags (e.g., `ls -la`), `echo -e` escape handling, and subshell/background constructs may behave differently or be unavailable on non-Unix builds. For full POSIX semantics run the shell under WSL, Git Bash, or a Unix-like host.
 
 ### 5.4 Redirection
 

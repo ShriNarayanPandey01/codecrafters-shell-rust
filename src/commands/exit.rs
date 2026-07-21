@@ -9,7 +9,7 @@ impl BuiltInCommand for Exit {
     fn execute(
         &self,
         args: Vec<String>,
-        _context: &mut ShellContext,
+        context: &mut ShellContext,
         _stdout: &mut dyn Write,
     ) -> Result<(), String> {
         let exit_code = match args.first() {
@@ -19,12 +19,8 @@ impl BuiltInCommand for Exit {
             None => 0,
         };
 
-        // Save history to HISTFILE before exiting, since std::process::exit()
-        // terminates immediately and skips the post-loop save in main.
-        if let Ok(histfile) = std::env::var("HISTFILE") {
-            let _ = _context.save_history_to_file(&histfile);
-        }
-
-        std::process::exit(exit_code);
+        context.should_exit = true;
+        context.requested_exit_code = exit_code;
+        Ok(())
     }
 }

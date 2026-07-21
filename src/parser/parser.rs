@@ -98,7 +98,9 @@ impl Parser {
                     continue;
                 }
                 Token::Semicolon => return Err("sequences are not supported yet".to_string()),
-                Token::Ampersand => return Err("background jobs are only supported at end of command".to_string()),
+                Token::Ampersand => {
+                    return Err("background jobs are only supported at end of command".to_string());
+                }
                 Token::LeftParen | Token::RightParen => {
                     return Err("subshells are not supported yet".to_string());
                 }

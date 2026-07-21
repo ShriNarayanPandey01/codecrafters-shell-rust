@@ -2,7 +2,8 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 
 use crate::commands::external::{
-    find_command_in_path, run_external_command, run_external_command_background,
+    BackgroundCommandRequest, ExternalCommandIo, find_command_in_path, run_external_command,
+    run_external_command_background,
 };
 use crate::parser::ast::{ASTNode, RedirectStream};
 use crate::registry::command_registry::CommandRegistry;
@@ -13,6 +14,17 @@ pub struct CommandExecution<'a> {
     pub stdout_redirect: Option<(String, bool)>,
     pub stderr_redirect: Option<(String, bool)>,
     pub background: bool,
+}
+
+struct ExecuteCommandRequest<'a> {
+    name: &'a str,
+    args: &'a [String],
+    registry: &'a CommandRegistry,
+    context: &'a mut ShellContext,
+    stdout: &'a mut dyn Write,
+    stderr: &'a mut dyn Write,
+    stdout_file: Option<File>,
+    stderr_file: Option<File>,
 }
 
 pub fn execute_ast(
@@ -28,11 +40,11 @@ pub fn execute_ast(
 
     let execution = flatten_command_execution(node)?;
     let mut redirected_stdout = match execution.stdout_redirect.as_ref() {
-        Some((path, append)) => Some(open_redirect_file(path, *append)?),
+        Some((path, append)) => Some(open_redirect_file(path, *append, context)?),
         None => None,
     };
     let mut redirected_stderr = match execution.stderr_redirect.as_ref() {
-        Some((path, append)) => Some(open_redirect_file(path, *append)?),
+        Some((path, append)) => Some(open_redirect_file(path, *append, context)?),
         None => None,
     };
 
@@ -47,29 +59,40 @@ pub fn execute_ast(
                     .as_mut()
                     .map(|file| file as &mut dyn Write)
                     .unwrap_or(stdout);
-                execute_command(name, args, registry, context, stdout_writer, None, None)
-            } else if execution.background {
-                let command_string = build_command_string(name, args);
-                run_external_command_background(
+                execute_command(ExecuteCommandRequest {
                     name,
                     args,
-                    find_command_in_path(name).ok_or_else(|| format!("{name}: not found"))?,
+                    registry,
+                    context,
+                    stdout: stdout_writer,
+                    stderr,
+                    stdout_file: None,
+                    stderr_file: None,
+                })
+            } else if execution.background {
+                let command_string = build_command_string(name, args);
+                run_external_command_background(BackgroundCommandRequest {
+                    name,
+                    args,
+                    executable_path: find_command_in_path(name)
+                        .ok_or_else(|| format!("{name}: not found"))?,
                     stdout,
-                    redirected_stdout.take(),
-                    redirected_stderr.take(),
+                    stdout_file: redirected_stdout.take(),
+                    stderr_file: redirected_stderr.take(),
                     context,
                     command_string,
-                )
+                })
             } else {
-                execute_command(
+                execute_command(ExecuteCommandRequest {
                     name,
                     args,
                     registry,
                     context,
                     stdout,
-                    redirected_stdout.take(),
-                    redirected_stderr.take(),
-                )
+                    stderr,
+                    stdout_file: redirected_stdout.take(),
+                    stderr_file: redirected_stderr.take(),
+                })
             }
         }
         ASTNode::Background { command } => {
@@ -79,16 +102,17 @@ pub fn execute_ast(
                     return Err("background builtins are not supported yet".to_string());
                 }
                 let command_string = build_command_string(name, args);
-                run_external_command_background(
+                run_external_command_background(BackgroundCommandRequest {
                     name,
                     args,
-                    find_command_in_path(name).ok_or_else(|| format!("{name}: not found"))?,
+                    executable_path: find_command_in_path(name)
+                        .ok_or_else(|| format!("{name}: not found"))?,
                     stdout,
-                    redirected_stdout.take(),
-                    redirected_stderr.take(),
+                    stdout_file: redirected_stdout.take(),
+                    stderr_file: redirected_stderr.take(),
                     context,
                     command_string,
-                )
+                })
             } else {
                 Err("unsupported background command".to_string())
             }
@@ -99,9 +123,11 @@ pub fn execute_ast(
     match command_result {
         Err(error) if execution.stderr_redirect.is_some() => {
             if !error.is_empty() {
-                let (path, append) = execution.stderr_redirect.as_ref().unwrap();
-                let mut error_file =
-                    open_redirect_file(path, *append).map_err(|write_error| write_error.to_string())?;
+                let Some((path, append)) = execution.stderr_redirect.as_ref() else {
+                    return Err(error);
+                };
+                let mut error_file = open_redirect_file(path, *append, context)
+                    .map_err(|write_error| write_error.to_string())?;
                 writeln!(error_file, "{error}").map_err(|write_error| write_error.to_string())?;
             }
             Err(String::new())
@@ -187,7 +213,7 @@ fn execute_pipe(
             return execute_ast(&commands[0], registry, context, stdout, stderr);
         }
 
-        return execute_pipeline_stages(&commands, registry, context);
+        return execute_pipeline_stages(&commands, registry, context, stdout, stderr);
     }
 
     #[cfg(not(unix))]
@@ -214,11 +240,20 @@ fn execute_pipeline_stages(
     commands: &[ASTNode],
     registry: &CommandRegistry,
     context: &mut ShellContext,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<(), String> {
     if commands.len() == 2 {
-        execute_two_stage_pipeline(&commands[0], &commands[1], registry, context)
+        execute_two_stage_pipeline(
+            &commands[0],
+            &commands[1],
+            registry,
+            context,
+            stdout,
+            stderr,
+        )
     } else {
-        execute_multi_stage_pipeline(commands, registry, context)
+        execute_multi_stage_pipeline(commands, registry, context, stdout, stderr)
     }
 }
 
@@ -228,6 +263,8 @@ fn execute_two_stage_pipeline(
     second: &ASTNode,
     registry: &CommandRegistry,
     context: &mut ShellContext,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<(), String> {
     let first_exec = flatten_command_execution(first)?;
     let second_exec = flatten_command_execution(second)?;
@@ -239,12 +276,13 @@ fn execute_two_stage_pipeline(
 
     #[cfg(unix)]
     {
-        use std::io::Read;
-        use std::process::{Command, Stdio};
-        use std::os::unix::io::FromRawFd;
         use crate::commands::external::{
             execute_external_command_with_stdin, spawn_external_command,
         };
+        use std::io::Read;
+        use std::io::Write;
+        use std::os::unix::io::FromRawFd;
+        use std::process::{Command, Stdio};
 
         let mut fds: [libc::c_int; 2] = [0; 2];
         if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
@@ -271,12 +309,24 @@ fn execute_two_stage_pipeline(
                     registry,
                     context,
                     &stdin_buffer,
+                    stdout,
                 )?;
             } else {
-                execute_external_command_with_stdin(&second_name, &second_args, pipe_read)?;
+                execute_external_command_with_stdin(
+                    &second_name,
+                    &second_args,
+                    &context.current_dir_path(),
+                    pipe_read,
+                    stdout,
+                )?;
             }
         } else if second_is_builtin {
-            let mut child = spawn_external_command(&first_name, &first_args, pipe_write)?;
+            let mut child = spawn_external_command(
+                &first_name,
+                &first_args,
+                &context.current_dir_path(),
+                pipe_write,
+            )?;
 
             let mut stdin_buffer = Vec::new();
             let mut file = pipe_read;
@@ -293,15 +343,26 @@ fn execute_two_stage_pipeline(
                 registry,
                 context,
                 &stdin_buffer,
+                stdout,
             )?;
         } else {
-            let mut first_child = spawn_external_command(&first_name, &first_args, pipe_write)?;
+            let mut first_child = spawn_external_command(
+                &first_name,
+                &first_args,
+                &context.current_dir_path(),
+                pipe_write,
+            )?;
 
             let mut second_child = Command::new(
                 find_command_in_path(&second_name)
                     .ok_or_else(|| format!("{second_name}: not found"))?,
             );
-            second_child.args(&second_args).stdin(Stdio::from(pipe_read));
+            second_child
+                .args(&second_args)
+                .current_dir(context.current_dir_path())
+                .stdin(Stdio::from(pipe_read))
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
 
             #[cfg(unix)]
             {
@@ -310,16 +371,19 @@ fn execute_two_stage_pipeline(
                 second_child.arg0(&second_name);
             }
 
-            let mut second_child = second_child
-                .spawn()
+            let output = second_child
+                .output()
                 .map_err(|e| format!("failed to spawn {second_name}: {e}"))?;
 
             first_child
                 .wait()
                 .map_err(|e| format!("failed to wait for {first_name}: {e}"))?;
-            second_child
-                .wait()
-                .map_err(|e| format!("failed to wait for {second_name}: {e}"))?;
+            stdout
+                .write_all(&output.stdout)
+                .map_err(|e| e.to_string())?;
+            stderr
+                .write_all(&output.stderr)
+                .map_err(|e| e.to_string())?;
         }
 
         Ok(())
@@ -327,7 +391,14 @@ fn execute_two_stage_pipeline(
 
     #[cfg(not(unix))]
     {
-        let _ = (first_name, first_args, first_is_builtin, second_name, second_args, second_is_builtin);
+        let _ = (
+            first_name,
+            first_args,
+            first_is_builtin,
+            second_name,
+            second_args,
+            second_is_builtin,
+        );
         Err("pipelines are only supported on Unix".to_string())
     }
 }
@@ -362,13 +433,12 @@ fn execute_builtin_with_input(
     registry: &CommandRegistry,
     context: &mut ShellContext,
     _stdin_buffer: &[u8],
+    stdout: &mut dyn Write,
 ) -> Result<(), String> {
-    let mut stdout = std::io::stdout().lock();
-
     if let Some(command) = registry.get_builtin(name) {
-        command.execute(args.to_vec(), context, &mut stdout)?;
+        command.execute(args.to_vec(), context, stdout)?;
     } else if name == "type" {
-        run_type_command(args, registry, &mut stdout)?;
+        run_type_command(args, registry, stdout)?;
     } else {
         return Err(format!("{name}: not found"));
     }
@@ -395,13 +465,15 @@ fn execute_multi_stage_pipeline(
     commands: &[ASTNode],
     registry: &CommandRegistry,
     context: &mut ShellContext,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<(), String> {
     if commands.is_empty() {
         return Err("empty pipeline".to_string());
     }
 
     if commands.len() <= 2 {
-        return execute_pipeline_stages(commands, registry, context);
+        return execute_pipeline_stages(commands, registry, context, stdout, stderr);
     }
 
     #[cfg(unix)]
@@ -428,14 +500,18 @@ fn execute_multi_stage_pipeline(
                 extract_command_info(execution.command, registry)?;
 
             if cmd_name == "type" || registry.get_builtin(&cmd_name).is_some() {
-                return Err("built-in commands in multi-stage pipelines not yet supported".to_string());
+                return Err(
+                    "built-in commands in multi-stage pipelines not yet supported".to_string(),
+                );
             }
 
             let path =
                 find_command_in_path(&cmd_name).ok_or_else(|| format!("{cmd_name}: not found"))?;
 
             let mut cmd_obj = Command::new(path);
-            cmd_obj.args(&cmd_args);
+            cmd_obj
+                .args(&cmd_args)
+                .current_dir(context.current_dir_path());
 
             #[cfg(unix)]
             {
@@ -457,13 +533,17 @@ fn execute_multi_stage_pipeline(
             }
 
             if let Some((path, append)) = execution.stdout_redirect {
-                let file = open_redirect_file(&path, append)?;
+                let file = open_redirect_file(&path, append, context)?;
                 cmd_obj.stdout(Stdio::from(file));
+            } else if i == num_commands - 1 {
+                cmd_obj.stdout(Stdio::piped());
             }
 
             if let Some((path, append)) = execution.stderr_redirect {
-                let file = open_redirect_file(&path, append)?;
+                let file = open_redirect_file(&path, append, context)?;
                 cmd_obj.stderr(Stdio::from(file));
+            } else if i == num_commands - 1 {
+                cmd_obj.stderr(Stdio::piped());
             }
 
             let child = cmd_obj
@@ -475,10 +555,24 @@ fn execute_multi_stage_pipeline(
 
         drop(pipes);
 
-        for mut child in children {
-            child
-                .wait()
-                .map_err(|e| format!("failed to wait for child process: {e}"))?;
+        let last_index = children.len().saturating_sub(1);
+
+        for (index, child) in children.iter_mut().enumerate() {
+            if index == last_index {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|e| format!("failed to wait for child process: {e}"))?;
+                stdout
+                    .write_all(&output.stdout)
+                    .map_err(|e| e.to_string())?;
+                stderr
+                    .write_all(&output.stderr)
+                    .map_err(|e| e.to_string())?;
+            } else {
+                child
+                    .wait()
+                    .map_err(|e| format!("failed to wait for child process: {e}"))?;
+            }
         }
 
         Ok(())
@@ -491,25 +585,29 @@ fn execute_multi_stage_pipeline(
     }
 }
 
-fn execute_command(
-    name: &str,
-    args: &[String],
-    registry: &CommandRegistry,
-    context: &mut ShellContext,
-    stdout: &mut dyn Write,
-    stdout_file: Option<File>,
-    stderr_file: Option<File>,
-) -> Result<(), String> {
-    if name == "type" {
-        return run_type_command(args, registry, stdout);
+fn execute_command(request: ExecuteCommandRequest<'_>) -> Result<(), String> {
+    if request.name == "type" {
+        return run_type_command(request.args, request.registry, request.stdout);
     }
 
-    if let Some(command) = registry.get_builtin(name) {
-        return command.execute(args.to_vec(), context, stdout);
+    if let Some(command) = request.registry.get_builtin(request.name) {
+        return command.execute(request.args.to_vec(), request.context, request.stdout);
     }
 
-    let executable_path = find_command_in_path(name).ok_or_else(|| format!("{name}: not found"))?;
-    run_external_command(name, args, executable_path, stdout_file, stderr_file)
+    let executable_path =
+        find_command_in_path(request.name).ok_or_else(|| format!("{}: not found", request.name))?;
+    run_external_command(
+        request.name,
+        request.args,
+        executable_path,
+        &request.context.current_dir_path(),
+        ExternalCommandIo {
+            stdout: request.stdout,
+            stderr: request.stderr,
+            stdout_file: request.stdout_file,
+            stderr_file: request.stderr_file,
+        },
+    )
 }
 
 fn run_type_command(
@@ -543,7 +641,7 @@ fn build_command_string(name: &str, args: &[String]) -> String {
     }
 }
 
-fn open_redirect_file(path: &str, append: bool) -> Result<File, String> {
+fn open_redirect_file(path: &str, append: bool, context: &ShellContext) -> Result<File, String> {
     let mut options = OpenOptions::new();
     options.write(true).create(true);
 
@@ -553,5 +651,8 @@ fn open_redirect_file(path: &str, append: bool) -> Result<File, String> {
         options.truncate(true);
     }
 
-    options.open(path).map_err(|error| error.to_string())
+    let resolved_path = context.resolve_path(path);
+    options
+        .open(resolved_path)
+        .map_err(|error| error.to_string())
 }

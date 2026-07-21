@@ -72,15 +72,14 @@ fn display_history(
     };
 
     for (i, command) in context.history.iter().enumerate().skip(start_index) {
-        writeln!(stdout, "{:5}  {}", i + 1, command)
-            .map_err(|error| error.to_string())?;
+        writeln!(stdout, "{:5}  {}", i + 1, command).map_err(|error| error.to_string())?;
     }
     Ok(())
 }
 
 fn read_history_file(context: &mut ShellContext, path: &str) -> Result<(), String> {
-    let content =
-        fs::read_to_string(path).map_err(|e| format!("history -r: {}", e.to_string()))?;
+    let resolved_path = context.resolve_path(path);
+    let content = fs::read_to_string(&resolved_path).map_err(|e| format!("history -r: {e}"))?;
 
     for line in content.lines() {
         if !line.is_empty() {
@@ -99,13 +98,15 @@ fn write_history_file(context: &ShellContext, path: &str) -> Result<(), String> 
         format!("{}\n", history_text)
     };
 
-    fs::write(path, content).map_err(|e| format!("history -w: {}", e.to_string()))?;
+    let resolved_path = context.resolve_path(path);
+    fs::write(resolved_path, content).map_err(|e| format!("history -w: {e}"))?;
     Ok(())
 }
 
 fn append_history_file(context: &mut ShellContext, path: &str) -> Result<(), String> {
+    let resolved_path = context.resolve_path(path);
     // Read existing content
-    let existing_content = fs::read_to_string(path).unwrap_or_default();
+    let existing_content = fs::read_to_string(&resolved_path).unwrap_or_default();
 
     // Get new commands since last save
     let new_commands: Vec<String> = context
@@ -128,6 +129,6 @@ fn append_history_file(context: &mut ShellContext, path: &str) -> Result<(), Str
         format!("{}\n{}\n", existing_content, new_history_text)
     };
 
-    fs::write(path, new_content).map_err(|e| format!("history -a: {}", e.to_string()))?;
+    fs::write(resolved_path, new_content).map_err(|e| format!("history -a: {e}"))?;
     Ok(())
 }

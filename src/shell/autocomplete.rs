@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use rustyline::completion::longest_common_prefix as rustyline_longest_common_prefix;
 use rustyline::completion::{Completer, Pair};
@@ -10,6 +9,7 @@ use rustyline::hint::Hinter;
 use rustyline::validate::Validator;
 use rustyline::{Context, Helper, Result};
 
+use crate::commands::external::build_command_for_path;
 use crate::shell::completion_registry::CompletionRegistry;
 
 pub struct ShellAutocomplete {
@@ -20,7 +20,10 @@ pub struct ShellAutocomplete {
 impl ShellAutocomplete {
     pub fn new(completions: CompletionRegistry) -> Self {
         Self {
-            builtins: vec!["cd", "complete", "echo", "exit", "jobs", "pwd", "type"],
+            builtins: vec![
+                "cat", "cd", "complete", "declare", "echo", "exit", "history", "jobs", "ls",
+                "mkdir", "pwd", "rm", "touch", "type",
+            ],
             completions,
         }
     }
@@ -66,15 +69,28 @@ fn token_at_cursor(line: &str, pos: usize) -> TokenAtCursor<'_> {
         .map(|index| index + 1)
         .unwrap_or(0);
 
+    let prefix_before_token = before_cursor[..start].trim_end();
+    let is_command_position =
+        prefix_before_token.is_empty() || prefix_before_token.ends_with(['|', ';', '&']);
+
     TokenAtCursor {
         start,
         text: &line[start..pos],
-        is_command_position: start == 0,
+        is_command_position,
     }
 }
 
 fn command_name(line: &str, pos: usize) -> Option<String> {
-    line[..pos].split_whitespace().next().map(str::to_string)
+    let before_cursor = &line[..pos];
+    let segment_start = before_cursor
+        .rfind(['|', ';', '&'])
+        .map(|index| index + 1)
+        .unwrap_or(0);
+
+    before_cursor[segment_start..]
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
 }
 
 fn command_matches(builtins: &[&str], prefix: &str) -> Vec<Pair> {
@@ -92,16 +108,32 @@ fn command_matches(builtins: &[&str], prefix: &str) -> Vec<Pair> {
         }
     }
 
-    let has_single_match = matches.len() == 1;
+    let matches = matches.into_iter().collect::<Vec<_>>();
+    if matches.is_empty() {
+        return Vec::new();
+    }
+
+    if matches.len() == 1 {
+        let matched = matches.into_iter().next().unwrap();
+        return vec![Pair {
+            display: matched.clone(),
+            replacement: format!("{matched} "),
+        }];
+    }
+
+    let lcp = longest_common_prefix(&matches.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+    if lcp.len() > prefix.len() {
+        return vec![Pair {
+            display: lcp.to_string(),
+            replacement: lcp.to_string(),
+        }];
+    }
+
     matches
         .into_iter()
         .map(|matched| Pair {
             display: matched.clone(),
-            replacement: if has_single_match {
-                format!("{matched} ")
-            } else {
-                matched
-            },
+            replacement: matched,
         })
         .collect()
 }
@@ -122,10 +154,13 @@ fn completion_matches(
     };
 
     let previous_word = previous_word(line, pos);
-    let output = match Command::new(script_path)
-        .arg(command_name)
-        .arg(prefix)
-        .arg(previous_word)
+    let args = vec![command_name.to_string(), prefix.to_string(), previous_word];
+    let mut command = match build_command_for_path(PathBuf::from(script_path), &args) {
+        Ok(command) => command,
+        Err(_) => return Vec::new(),
+    };
+
+    let output = match command
         .env("COMP_LINE", line)
         .env("COMP_POINT", pos.to_string())
         .output()
@@ -163,13 +198,13 @@ fn completion_matches(
         })
         .collect::<Vec<_>>();
 
-    if let Some(lcp) = rustyline_longest_common_prefix(&pairs) {
-        if lcp.len() > prefix.len() {
-            return vec![Pair {
-                display: lcp.to_string(),
-                replacement: lcp.to_string(),
-            }];
-        }
+    if let Some(lcp) = rustyline_longest_common_prefix(&pairs)
+        && lcp.len() > prefix.len()
+    {
+        return vec![Pair {
+            display: lcp.to_string(),
+            replacement: lcp.to_string(),
+        }];
     }
 
     pairs
@@ -311,10 +346,10 @@ fn path_executables() -> BTreeSet<String> {
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if is_executable_file(&path) {
-                if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-                    executables.insert(name.to_string());
-                }
+            if is_executable_file(&path)
+                && let Some(name) = path.file_name().and_then(|name| name.to_str())
+            {
+                executables.insert(name.to_string());
             }
         }
     }

@@ -9,7 +9,7 @@ A fully-featured, POSIX-inspired shell written from scratch in **Rust**. It incl
 | Category | Details |
 |---|---|
 | **Custom Lexer & Parser** | Tokenizes raw input and builds an AST supporting commands, pipes, redirects, and background execution |
-| **Built-in Commands** | `echo`, `cd`, `pwd`, `exit`, `type`, `history`, `jobs`, `declare`, `complete` |
+| **Built-in Commands** | `echo`, `cd`, `pwd`, `exit`, `type`, `history`, `jobs`, `declare`, `complete`, `cat`, `mkdir`, `rm`, `touch` |
 | **External Commands** | Resolves and executes any program found in `$PATH` |
 | **Pipelines** | Chain commands with `\|` — supports 2-stage and multi-stage pipelines |
 | **I/O Redirection** | `>`, `>>`, `2>`, `2>>` for stdout and stderr redirection to files |
@@ -41,6 +41,22 @@ cargo build --release
 cargo run
 ```
 
+### Run With a Custom Executable Path
+
+```bash
+cargo run -- --path "/custom/executables"
+```
+
+This injects the specified directory into the shell's runtime `$PATH`, making locally built tools available to executed commands.
+
+### Run As An API Server
+
+```bash
+cargo run -- serve 7878
+```
+
+By default the API binds to `127.0.0.1`. Set `BYOSHELL_HOST=0.0.0.0` if you want to expose it beyond localhost.
+
 You'll be greeted with the shell prompt:
 
 ```
@@ -60,6 +76,89 @@ cargo run < showcase.sh
 ```powershell
 Get-Content showcase.sh | cargo run
 ```
+
+---
+
+## 🔧 Test Suite
+
+A simple smoke test script is provided at `tests/test_suite.sh` to exercise built-ins, redirection, and basic file operations.
+
+Run the test suite (PowerShell):
+
+```powershell
+Get-Content tests/test_suite.sh | cargo run
+```
+
+Notes:
+- The shell is under active development; on Windows some POSIX flags and constructs (e.g., `ls -l`, `echo -e`, subshell backgrounding, and some pipeline behaviors) may behave differently or be unsupported. Use WSL, Git Bash, or Linux/macOS for fuller POSIX compatibility.
+- The test script is written to use BYOShell-compatible constructs where possible; adjust it if you extend builtin behaviors.
+
+---
+
+## HTTP API
+
+The same shell engine can now be used through HTTP, which makes it easy to connect to a portfolio frontend.
+
+### Endpoint
+
+`POST /execute`
+
+### Request Body
+
+```json
+{
+  "session_id": "portfolio",
+  "command": "echo hello"
+}
+```
+
+- `session_id` keeps shell state alive across requests, including `cd`, `declare`, history, and background jobs.
+- `command` is the shell command to execute.
+
+You can also send plain text instead of JSON. In that case, the server uses the default session.
+
+### Response Body
+
+```json
+{
+  "session_id": "portfolio",
+  "command": "echo hello",
+  "stdout": "hello\n",
+  "stderr": "",
+  "exit_code": 0,
+  "current_dir": "/path/to/project",
+  "should_exit": false
+}
+```
+
+### Health Check
+
+`GET /health`
+
+### Portfolio Frontend Example
+
+```js
+async function runShellCommand(command) {
+  const response = await fetch("http://127.0.0.1:7878/execute", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      session_id: "portfolio",
+      command,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed with ${response.status}`);
+  }
+
+  return response.json();
+}
+```
+
+This lets your portfolio send commands and render `stdout`, `stderr`, and `current_dir` in the UI while keeping the terminal experience intact.
 
 ---
 
@@ -122,6 +221,29 @@ $ echo $MY_VAR
 hello
 $ declare -p MY_VAR
 declare -- MY_VAR="hello"
+```
+
+#### `cat` — Print file contents to stdout
+```bash
+$ cat README.md
+```
+
+#### `mkdir` — Create directories
+```bash
+$ mkdir new-folder
+$ mkdir -p nested/folder
+```
+
+#### `rm` — Remove files and directories
+```bash
+$ rm file.txt
+$ rm -r dir-to-remove
+```
+
+#### `touch` — Create an empty file or update file timestamp
+```bash
+$ touch empty.txt
+$ touch existing.txt
 ```
 
 #### `jobs` — List background jobs
@@ -198,6 +320,7 @@ hello_world
 src/
 ├── main.rs                     # Entry point, REPL loop, AST execution engine
 ├── commands/                   # Built-in command implementations
+│   ├── cat.rs                  #   cat — print file contents
 │   ├── cd.rs                   #   cd — change directory
 │   ├── complete.rs             #   complete — manage tab completions
 │   ├── declare.rs              #   declare — shell variables
@@ -205,7 +328,14 @@ src/
 │   ├── exit.rs                 #   exit — terminate the shell
 │   ├── history.rs              #   history — command history management
 │   ├── jobs.rs                 #   jobs — background job listing
-│   └── pwd.rs                  #   pwd — print working directory
+│   ├── ls.rs                   #   ls — list directory contents
+│   ├── mkdir.rs                #   mkdir — create directories
+│   ├── pwd.rs                  #   pwd — print working directory
+│   ├── rm.rs                   #   rm — remove files and directories
+│   └── touch.rs                #   touch — create files / update timestamps
+├── external.rs                # External command lookup and execution support
+├── engine.rs                  # Core execution engine for command ASTs
+├── server.rs                  # HTTP server entrypoint (API mode)
 ├── lexers/
 │   ├── lexer.rs                # Tokenizer — transforms raw input into tokens
 │   └── token.rs                # Token type definitions
