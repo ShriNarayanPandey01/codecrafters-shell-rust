@@ -555,7 +555,7 @@ fn execute_multi_stage_pipeline(
 
         drop(pipes);
 
-        let mut last_child = children
+        let last_child = children
             .pop()
             .ok_or_else(|| "empty pipeline".to_string())?;
 

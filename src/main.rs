@@ -157,10 +157,11 @@ fn parse_server_args(args: &[String]) -> Option<(String, u16)> {
         return None;
     }
 
-    let host = std::env::var("BYOSHELL_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let host = std::env::var("BYOSHELL_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port = args
         .get(1)
         .and_then(|value| value.parse::<u16>().ok())
+        .or_else(|| std::env::var("PORT").ok()?.parse::<u16>().ok())
         .unwrap_or(7878);
 
     Some((host, port))

@@ -55,7 +55,7 @@ This injects the specified directory into the shell's runtime `$PATH`, making lo
 cargo run -- serve 7878
 ```
 
-By default the API binds to `127.0.0.1`. Set `BYOSHELL_HOST=0.0.0.0` if you want to expose it beyond localhost.
+By default the API binds to `0.0.0.0` and will also honor the `PORT` environment variable when no explicit port argument is provided. Set `BYOSHELL_HOST` if you want to override the bind address.
 
 You'll be greeted with the shell prompt:
 
