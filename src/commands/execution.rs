@@ -555,25 +555,25 @@ fn execute_multi_stage_pipeline(
 
         drop(pipes);
 
-        let last_index = children.len().saturating_sub(1);
+        let mut last_child = children
+            .pop()
+            .ok_or_else(|| "empty pipeline".to_string())?;
 
-        for (index, child) in children.iter_mut().enumerate() {
-            if index == last_index {
-                let output = child
-                    .wait_with_output()
-                    .map_err(|e| format!("failed to wait for child process: {e}"))?;
-                stdout
-                    .write_all(&output.stdout)
-                    .map_err(|e| e.to_string())?;
-                stderr
-                    .write_all(&output.stderr)
-                    .map_err(|e| e.to_string())?;
-            } else {
-                child
-                    .wait()
-                    .map_err(|e| format!("failed to wait for child process: {e}"))?;
-            }
+        for child in &mut children {
+            child
+                .wait()
+                .map_err(|e| format!("failed to wait for child process: {e}"))?;
         }
+
+        let output = last_child
+            .wait_with_output()
+            .map_err(|e| format!("failed to wait for child process: {e}"))?;
+        stdout
+            .write_all(&output.stdout)
+            .map_err(|e| e.to_string())?;
+        stderr
+            .write_all(&output.stderr)
+            .map_err(|e| e.to_string())?;
 
         Ok(())
     }
